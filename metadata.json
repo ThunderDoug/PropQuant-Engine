@@ -1,0 +1,6 @@
+{
+  "name": "PropQuant Engine",
+  "description": "Plataforma quantitativa de arbitragem de liquidez, hedging assimétrico, dimensionamento trade-a-trade e análise de risco em mesas proprietárias.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
