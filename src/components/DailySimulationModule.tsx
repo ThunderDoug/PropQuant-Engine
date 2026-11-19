@@ -108,7 +108,9 @@ export function DailySimulationModule({
 
   const safeDaysDivisor = Math.max(1, minDaysDivisor);
   const evalTargetPreview =
-    summary.currentPhase === 'Fase 2' && firm.phase2TargetUsd > 0
+    summary.currentPhase === 'Funded'
+      ? Math.max(100, arbitrageInputs.payoutGrossProfitUsd)
+      : summary.currentPhase === 'Fase 2' && firm.phase2TargetUsd > 0
       ? firm.phase2TargetUsd
       : firm.phase1TargetUsd > 0
       ? firm.phase1TargetUsd
@@ -641,6 +643,84 @@ export function DailySimulationModule({
                   </button>
                 </div>
 
+                {funded101Enabled && (
+                  <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-medium text-slate-700 dark:text-slate-200">
+                        Prop Firm (1:10) · TP e SL
+                      </span>
+                      <div className="flex items-center gap-1">
+                        {[100, 150, 200].map((val) => (
+                          <button
+                            key={val}
+                            type="button"
+                            onClick={() =>
+                              onChangeFunded101({
+                                ...funded101Inputs,
+                                shortTargetUsd: val,
+                                remainingDrawdownUsd: Math.min(arbitrageInputs.drawdownUsd, val * 10),
+                              })
+                            }
+                            className={`rounded px-1.5 py-0.5 font-mono text-[10px] border ${
+                              funded101Inputs.shortTargetUsd === val
+                                ? 'border-emerald-500 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                                : 'border-slate-200 text-slate-500 dark:border-slate-700 dark:text-slate-400'
+                            }`}
+                          >
+                            +${val}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label
+                          htmlFor="sim-101-short-target"
+                          className="block text-[10px] text-slate-500 dark:text-slate-400"
+                        >
+                          TP Prop Firm ($)
+                        </label>
+                        <input
+                          id="sim-101-short-target"
+                          type="number"
+                          min={25}
+                          step="25"
+                          value={funded101Inputs.shortTargetUsd}
+                          onChange={(e) =>
+                            onChangeFunded101({
+                              ...funded101Inputs,
+                              shortTargetUsd: Number(e.target.value),
+                            })
+                          }
+                          className="mt-1 h-8 w-full rounded-md border border-slate-300 bg-white px-2 font-mono text-xs text-slate-900 focus:border-emerald-500 focus:outline-none dark:border-slate-700 dark:bg-[#111827] dark:text-slate-100"
+                        />
+                      </div>
+                      <div>
+                        <label
+                          htmlFor="sim-101-sl"
+                          className="block text-[10px] text-slate-500 dark:text-slate-400"
+                        >
+                          SL Prop Firm (1:10) ($)
+                        </label>
+                        <input
+                          id="sim-101-sl"
+                          type="number"
+                          min={100}
+                          step="100"
+                          value={funded101Inputs.remainingDrawdownUsd}
+                          onChange={(e) =>
+                            onChangeFunded101({
+                              ...funded101Inputs,
+                              remainingDrawdownUsd: Number(e.target.value),
+                            })
+                          }
+                          className="mt-1 h-8 w-full rounded-md border border-slate-300 bg-white px-2 font-mono text-xs text-slate-900 focus:border-emerald-500 focus:outline-none dark:border-slate-700 dark:bg-[#111827] dark:text-slate-100"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-200 dark:border-slate-800">
                   <span className="text-[11px] text-slate-600 dark:text-slate-300">
                     Seguro Hedge na Funded (L_C = L_M × F)
@@ -692,22 +772,49 @@ export function DailySimulationModule({
               </div>
 
               {/* Preview TP/SL */}
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] dark:border-slate-800 dark:bg-[#0B0F17]">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] dark:border-slate-800 dark:bg-[#0B0F17] space-y-1">
                 <div className="flex items-center justify-between text-slate-600 dark:text-slate-300">
                   <span>
-                    TP ({isCurrentlyInFunded101 ? 'Funded 10:1' : summary.currentPhase})
+                    TP Prop Firm (
+                    {isCurrentlyInFunded101
+                      ? 'Funded 1:10'
+                      : summary.currentPhase === 'Funded'
+                      ? 'Funded · 10:1 Desligado'
+                      : summary.currentPhase}
+                    )
                   </span>
                   <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400">
                     {formatUsd(previewTp, true)}
                   </span>
                 </div>
-                <div className="mt-1 flex items-center justify-between text-slate-600 dark:text-slate-300">
-                  <span>SL (Stop Dia)</span>
+                <div className="flex items-center justify-between text-slate-600 dark:text-slate-300">
+                  <span>SL Prop Firm (Stop Dia)</span>
                   <span className="font-mono font-semibold text-red-600 dark:text-red-400">
                     {formatUsd(-previewSl)}
                   </span>
                 </div>
-                <div className="mt-1 flex items-center justify-between text-slate-500 dark:text-slate-400">
+                {funded101Enabled && (
+                  <div className="pt-1 mt-1 border-t border-slate-200 dark:border-slate-800 space-y-0.5 text-[10px]">
+                    <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
+                      <span>Espelho Funded Prop Firm (1:10):</span>
+                      <span className="font-mono text-slate-700 dark:text-slate-200">
+                        TP {formatUsd(funded101Inputs.shortTargetUsd, true)} / SL{' '}
+                        {formatUsd(-funded101Inputs.remainingDrawdownUsd)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
+                      <span>
+                        Espelho Hedge (10:1 · F={formatFactor(funded101Outputs.effectiveHedgeFactor)}x):
+                      </span>
+                      <span className="font-mono text-emerald-600 dark:text-emerald-400">
+                        {hedgeDuringFunded
+                          ? `TP ${formatUsd(funded101Outputs.failureDay.brokerInsuranceGainUsd, true)} / SL ${formatUsd(funded101Outputs.normalDay.hedgeCostUsd)}`
+                          : 'Desligado'}
+                      </span>
+                    </div>
+                  </div>
+                )}
+                <div className="flex items-center justify-between text-slate-500 dark:text-slate-400">
                   <span>R:R efetivo da etapa atual</span>
                   <span className="font-mono">{previewEffectiveRr.toFixed(2)}:1</span>
                 </div>
@@ -1135,25 +1242,50 @@ export function DailySimulationModule({
             </div>
 
             <div>
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <label
                   htmlFor="m5-remaining-dd"
                   className="text-xs font-medium text-slate-700 dark:text-slate-300"
                 >
-                  Stop de Segurança / DD Remanescente (USD)
+                  Stop na Prop Firm / SL 1:10 (USD)
                 </label>
-                <button
-                  type="button"
-                  onClick={() =>
-                    onChangeFunded101({
-                      ...funded101Inputs,
-                      remainingDrawdownUsd: arbitrageInputs.drawdownUsd,
-                    })
-                  }
-                  className="text-[11px] font-medium text-emerald-600 hover:underline dark:text-emerald-400"
-                >
-                  Sincronizar DD ({formatUsd(arbitrageInputs.drawdownUsd)})
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onChangeFunded101({
+                        ...funded101Inputs,
+                        remainingDrawdownUsd: Math.min(
+                          arbitrageInputs.drawdownUsd,
+                          Math.max(100, funded101Inputs.shortTargetUsd * 10)
+                        ),
+                      })
+                    }
+                    className="text-[11px] font-medium text-emerald-600 hover:underline dark:text-emerald-400"
+                  >
+                    1:10 (
+                    {formatUsd(
+                      Math.min(
+                        arbitrageInputs.drawdownUsd,
+                        Math.max(100, funded101Inputs.shortTargetUsd * 10)
+                      )
+                    )}
+                    )
+                  </button>
+                  <span className="text-slate-300 dark:text-slate-700">·</span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onChangeFunded101({
+                        ...funded101Inputs,
+                        remainingDrawdownUsd: arbitrageInputs.drawdownUsd,
+                      })
+                    }
+                    className="text-[11px] font-medium text-slate-600 hover:underline dark:text-slate-300"
+                  >
+                    DD Máx ({formatUsd(arbitrageInputs.drawdownUsd)})
+                  </button>
+                </div>
               </div>
               <div className="relative mt-1.5">
                 <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-xs text-slate-400">
@@ -1352,7 +1484,7 @@ export function DailySimulationModule({
                 </div>
                 <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
                   {hedgeDuringFunded
-                    ? `Seguro F = ${formatFactor(hedgeFactor)}x`
+                    ? `F 10:1 = ${formatFactor(funded101Outputs.effectiveHedgeFactor)}x (cobre SL + Taxa)`
                     : 'Seguro Hedge desligado na Funded'}
                 </div>
               </div>
@@ -1375,25 +1507,25 @@ export function DailySimulationModule({
               <div className="rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-[#111827]">
                 <div className="flex items-baseline justify-between">
                   <h3 className="font-display text-base font-semibold text-slate-900 dark:text-slate-50">
-                    Dia Normal (Meta Curta)
+                    Dia Normal (TP Prop Firm · SL Hedge)
                   </h3>
                   <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
                     {funded101Inputs.statisticalWinRatePct}% prob.
                   </span>
                 </div>
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Alvo de {funded101Outputs.takeProfitPoints.toFixed(1)} {selectedSpec.unitLabel} batido rapidamente para validar 1 dia ativo.
+                  Prop Firm bate TP curto de {funded101Outputs.takeProfitPoints.toFixed(1)} {selectedSpec.unitLabel}; Conta Hedge toma SL curto de 10:1.
                 </p>
 
                 <dl className="mt-4 space-y-2 text-xs sm:text-sm">
                   <div className="flex items-center justify-between">
-                    <dt className="text-slate-600 dark:text-slate-400">Ganho na Mesa</dt>
+                    <dt className="text-slate-600 dark:text-slate-400">TP na Prop Firm (Mesa)</dt>
                     <dd className="font-mono font-medium text-emerald-600 dark:text-emerald-400">
                       {formatUsd(funded101Outputs.normalDay.mesaGainUsd, true)}
                     </dd>
                   </div>
                   <div className="flex items-center justify-between">
-                    <dt className="text-slate-600 dark:text-slate-400">Custo de Hedge</dt>
+                    <dt className="text-slate-600 dark:text-slate-400">SL na Conta Hedge (L_C)</dt>
                     <dd className="font-mono font-medium text-red-600 dark:text-red-400">
                       {hedgeDuringFunded ? formatUsd(funded101Outputs.normalDay.hedgeCostUsd) : '$0,00'}
                     </dd>
@@ -1427,22 +1559,22 @@ export function DailySimulationModule({
               <div className="rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-[#111827]">
                 <div className="flex items-baseline justify-between">
                   <h3 className="font-display text-base font-semibold text-slate-900 dark:text-slate-50">
-                    Dia de Falha (Cisne Negro)
+                    Dia de Falha (SL 1:10 Mesa · TP 10:1 Hedge)
                   </h3>
                   <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
                     {hedgeDuringFunded ? 'Seguro acionado' : 'Sem seguro'}
                   </span>
                 </div>
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Drawdown atingido na mesa; com hedge ativo, o take oposto na corretora cobre a operação.
+                  Prop Firm atinge SL 1:10; Conta Hedge bate o TP 10:1 ajustado por F para cobrir o SL + taxa T + L_adic.
                 </p>
 
                 <dl className="mt-4 space-y-2 text-xs sm:text-sm">
                   <div className="flex items-center justify-between">
                     <dt className="text-slate-600 dark:text-slate-400">
                       {(arbitrageInputs.hedgeFactorMode ?? 'include_dd') === 'fee_only'
-                        ? 'DD na Mesa (Virtual)'
-                        : 'Perda na Mesa'}
+                        ? 'SL na Prop Firm (Virtual)'
+                        : 'SL na Prop Firm (1:10)'}
                     </dt>
                     <dd
                       className={`font-mono font-medium ${
@@ -1457,7 +1589,7 @@ export function DailySimulationModule({
                     </dd>
                   </div>
                   <div className="flex items-center justify-between">
-                    <dt className="text-slate-600 dark:text-slate-400">Take do Seguro (L_C)</dt>
+                    <dt className="text-slate-600 dark:text-slate-400">TP 10:1 na Conta Hedge (L_C)</dt>
                     <dd className="font-mono font-medium text-emerald-600 dark:text-emerald-400">
                       {hedgeDuringFunded
                         ? formatUsd(funded101Outputs.failureDay.brokerInsuranceGainUsd, true)

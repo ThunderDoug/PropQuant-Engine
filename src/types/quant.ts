@@ -1,6 +1,12 @@
 export type ThemeMode = 'dark' | 'light';
 
-export type WorkspaceSection = 'arbitrage' | 'sizing' | 'capital' | 'daily' | 'firms';
+export type WorkspaceSection =
+  | 'arbitrage'
+  | 'sizing'
+  | 'capital'
+  | 'daily'
+  | 'montecarlo'
+  | 'firms';
 
 export type PropFirmCategory = 'CFD / Forex' | 'Futuros';
 
@@ -206,6 +212,7 @@ export interface FundedMethod101Inputs {
 export interface FundedMethod101Outputs {
   isValid: boolean;
   validationError?: string;
+  effectiveHedgeFactor: number;
   propFirmLot: number;
   brokerHedgeLot: number;
   takeProfitPoints: number;
@@ -225,4 +232,53 @@ export interface FundedMethod101Outputs {
     netAfterFeeUsd: number;
   };
 }
+
+export interface MonteCarloSamplePath {
+  id: number;
+  outcome: JourneyStatus;
+  finalNetUsd: number;
+  points: number[];
+}
+
+export interface MonteCarloHistogramBin {
+  label: string;
+  minUsd: number;
+  maxUsd: number;
+  count: number;
+  pct: number;
+}
+
+export interface MonteCarloPercentilePoint {
+  day: number;
+  p10: number;
+  p50: number;
+  p90: number;
+}
+
+export interface MonteCarloSummary {
+  numRuns: number;
+  evalPassRatePct: number;
+  payoutSuccessRatePct: number;
+  stopOutRatePct: number;
+  stopInEvalCount: number;
+  stopInFundedCount: number;
+  payoutCount: number;
+  incompleteCount: number;
+  expectedNetUsd: number;
+  medianNetUsd: number;
+  p10NetUsd: number;
+  p90NetUsd: number;
+  minNetUsd: number;
+  maxNetUsd: number;
+  negativeOutcomeRatePct: number;
+  avgDaysToFinish: number;
+  avgMaxBrokerOutlayUsd: number;
+  p95MaxBrokerOutlayUsd: number;
+  avgPayoutNetUsd: number;
+  avgStopNetUsd: number;
+  samplePaths: MonteCarloSamplePath[];
+  percentilesByDay: MonteCarloPercentilePoint[];
+  histogram: MonteCarloHistogramBin[];
+}
+
 

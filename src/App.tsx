@@ -5,6 +5,7 @@ import { CapitalBonusModule } from './components/CapitalBonusModule';
 import { ContextToolbar } from './components/ContextToolbar';
 import { DailySimulationModule } from './components/DailySimulationModule';
 import { Header } from './components/Header';
+import { MonteCarloModule } from './components/MonteCarloModule';
 import { PropFirmsModule } from './components/PropFirmsModule';
 import { TradeSizingModule } from './components/TradeSizingModule';
 import { DEFAULT_PROP_FIRMS_2026 } from './data/propFirms2026';
@@ -14,6 +15,7 @@ import {
   ConsultIntent,
   DailyTradeEntry,
   FundedMethod101Inputs,
+  MonteCarloSummary,
   PropFirmPreset,
   SavedSimulation,
   ThemeMode,
@@ -123,7 +125,7 @@ export default function App() {
 
   const [funded101Inputs, setFunded101Inputs] = useState<FundedMethod101Inputs>(() => ({
     shortTargetUsd: 150,
-    remainingDrawdownUsd: DEFAULT_PROP_FIRMS_2026[0].maxDrawdownUsd,
+    remainingDrawdownUsd: Math.min(DEFAULT_PROP_FIRMS_2026[0].maxDrawdownUsd, 150 * 10),
     stopLossPoints: 100,
     activeDaysTarget: Math.max(5, DEFAULT_PROP_FIRMS_2026[0].minTradingDays),
     statisticalWinRatePct: 92,
@@ -150,6 +152,8 @@ export default function App() {
       }
     )
   );
+
+  const [monteCarloSummary, setMonteCarloSummary] = useState<MonteCarloSummary | null>(null);
 
   const [isConsultantOpen, setIsConsultantOpen] = useState(false);
   const [pendingTrigger, setPendingTrigger] = useState<{
@@ -196,8 +200,14 @@ export default function App() {
       enabled: funded101Enabled,
       activeDaysTarget: funded101Inputs.activeDaysTarget,
       shortTargetUsd: funded101Inputs.shortTargetUsd,
+      stopMaxUsd: funded101Inputs.remainingDrawdownUsd,
     }),
-    [funded101Enabled, funded101Inputs.activeDaysTarget, funded101Inputs.shortTargetUsd]
+    [
+      funded101Enabled,
+      funded101Inputs.activeDaysTarget,
+      funded101Inputs.shortTargetUsd,
+      funded101Inputs.remainingDrawdownUsd,
+    ]
   );
 
   const dailySummary = useMemo(
@@ -231,7 +241,8 @@ export default function App() {
         tradeSizingInputs.instrumentId,
         tradeSizingInputs.customPointValueUsd,
         arbitrageInputs,
-        arbitrageOutputs.hedgeFactor
+        arbitrageOutputs.hedgeFactor,
+        protectDoubleLoss
       ),
     [
       funded101Inputs,
@@ -239,6 +250,7 @@ export default function App() {
       tradeSizingInputs.customPointValueUsd,
       arbitrageInputs,
       arbitrageOutputs.hedgeFactor,
+      protectDoubleLoss,
     ]
   );
 
@@ -261,7 +273,7 @@ export default function App() {
     const nextDays = Math.max(5, firm.minTradingDays);
     setFunded101Inputs((prev) => ({
       ...prev,
-      remainingDrawdownUsd: firm.maxDrawdownUsd,
+      remainingDrawdownUsd: Math.min(firm.maxDrawdownUsd, Math.max(100, prev.shortTargetUsd * 10)),
       activeDaysTarget: nextDays,
     }));
     setDailyEntries(
@@ -409,6 +421,18 @@ export default function App() {
         diaNormalLiquidoUSD: Number(funded101Outputs.normalDay.netAfterSplitUsd.toFixed(2)),
         diaFalhaLiquidoSemTaxaUSD: Number(funded101Outputs.failureDay.netBeforeFeeUsd.toFixed(2)),
       },
+      monteCarlo: monteCarloSummary
+        ? {
+            rodadas: monteCarloSummary.numRuns,
+            taxaPrimeiroPayoutPct: Number(monteCarloSummary.payoutSuccessRatePct.toFixed(1)),
+            taxaAprovacaoAvaliacaoPct: Number(monteCarloSummary.evalPassRatePct.toFixed(1)),
+            valorEsperadoEV_USD: Number(monteCarloSummary.expectedNetUsd.toFixed(2)),
+            medianaP50_USD: Number(monteCarloSummary.medianNetUsd.toFixed(2)),
+            p10_USD: Number(monteCarloSummary.p10NetUsd.toFixed(2)),
+            p90_USD: Number(monteCarloSummary.p90NetUsd.toFixed(2)),
+            capitalRealP95_USD: Number(monteCarloSummary.p95MaxBrokerOutlayUsd.toFixed(2)),
+          }
+        : null,
     }),
     [
       activeFirm,
@@ -419,10 +443,12 @@ export default function App() {
       capitalBonusInputs,
       capitalBonusOutputs,
       dailySummary,
+      protectDoubleLoss,
       funded101Enabled,
       hedgeDuringFunded,
       funded101Inputs,
       funded101Outputs,
+      monteCarloSummary,
     ]
   );
 
@@ -537,6 +563,25 @@ export default function App() {
                 setDailyEntries(generateStopOutTrajectory(activeFirm, arbitrageInputs))
               }
               onClearEntries={() => setDailyEntries([])}
+              onConsultIntent={handleConsultIntent}
+            />
+          )}
+
+          {activeSection === 'montecarlo' && activeFirm && (
+            <MonteCarloModule
+              firm={activeFirm}
+              arbitrageInputs={arbitrageInputs}
+              hedgeFactor={arbitrageOutputs.hedgeFactor}
+              desiredRiskUsd={tradeSizingInputs.desiredRiskUsd}
+              hedgeDuringFunded={hedgeDuringFunded}
+              onToggleHedgeDuringFunded={() => setHedgeDuringFunded((v) => !v)}
+              protectDoubleLoss={protectDoubleLoss}
+              onToggleProtectDoubleLoss={() => setProtectDoubleLoss((v) => !v)}
+              funded101Enabled={funded101Enabled}
+              onToggleFunded101={() => setFunded101Enabled((v) => !v)}
+              funded101Inputs={funded101Inputs}
+              onChangeFunded101={setFunded101Inputs}
+              onSummaryChange={setMonteCarloSummary}
               onConsultIntent={handleConsultIntent}
             />
           )}

@@ -12,6 +12,10 @@ import {
   InstrumentId,
   JourneyPhase,
   JourneyStatus,
+  MonteCarloHistogramBin,
+  MonteCarloPercentilePoint,
+  MonteCarloSamplePath,
+  MonteCarloSummary,
   PropFirmPreset,
   RandomSizingMode,
   SavedSimulation,
@@ -264,6 +268,7 @@ export interface Funded101StageConfig {
   enabled: boolean;
   activeDaysTarget: number;
   shortTargetUsd: number;
+  stopMaxUsd?: number;
 }
 
 export function runDailySimulation(
@@ -326,15 +331,24 @@ export function runDailySimulation(
         ? Math.min(remainingToFloorBefore, firm.dailyLossLimitUsd)
         : remainingToFloorBefore;
 
+    const isFunded101Step = activePhase === 'Funded' && Boolean(funded101?.enabled);
+    const slRiskDenominator =
+      isFunded101Step && funded101?.stopMaxUsd && funded101.stopMaxUsd > 0
+        ? Math.min(effectiveLiquidationLoss, Math.max(50, funded101.stopMaxUsd))
+        : effectiveLiquidationLoss;
+
     let appliedHedgeFactor = 0;
     if (isHedgeActiveToday) {
       if (protectDoubleLoss) {
+        const projectedLossOnStop = isFeeOnly
+          ? 0
+          : ddLimit - remainingToFloorBefore + slRiskDenominator;
         const neededBrokerGain =
-          (isFeeOnly ? 0 : ddLimit) +
+          projectedLossOnStop +
           arbitrageInputs.evaluationFeeUsd +
           arbitrageInputs.additionalProfitUsd -
           brokerCumulativePnl;
-        appliedHedgeFactor = Math.max(0, neededBrokerGain / effectiveLiquidationLoss);
+        appliedHedgeFactor = Math.max(0, neededBrokerGain / slRiskDenominator);
       } else {
         appliedHedgeFactor = hedgeFactor;
       }
@@ -650,8 +664,9 @@ export function generateRandomTrajectory(
     enabled: options.funded101Enabled ?? true,
     activeDaysTarget: Math.max(1, options.fundedActiveDaysTarget ?? Math.max(5, firm.minTradingDays)),
     shortTargetUsd: Math.max(50, options.fundedShortTargetUsd ?? 150),
+    stopMaxUsd: Math.max(50, options.fundedStopMaxUsd ?? Math.min(ddMax, (options.fundedShortTargetUsd ?? 150) * 10)),
   };
-  const fundedStopMax = Math.max(50, options.fundedStopMaxUsd ?? ddMax);
+  const fundedStopMax = funded101Config.stopMaxUsd ?? ddMax;
   const fundedWinRate = Math.max(50, Math.min(99, options.fundedWinRatePct ?? 92)) / 100;
 
   const p1Target =
@@ -761,7 +776,8 @@ export function calculateFundedMethod101(
   instrumentId: InstrumentId,
   customPointValueUsd: number,
   arbitrageInputs: ArbitrageInputs,
-  hedgeFactor: number
+  hedgeFactor: number,
+  protectDoubleLoss = true
 ): FundedMethod101Outputs {
   const spec = INSTRUMENT_SPECS.find((item) => item.id === instrumentId);
   const pointValue =
@@ -783,6 +799,7 @@ export function calculateFundedMethod101(
       isValid: false,
       validationError:
         'Alvo curto, drawdown remanescente, stop loss em pontos e valor do ponto devem ser maiores que zero.',
+      effectiveHedgeFactor: 0,
       propFirmLot: 0,
       brokerHedgeLot: 0,
       takeProfitPoints: 0,
@@ -804,35 +821,46 @@ export function calculateFundedMethod101(
     };
   }
 
+  const isFeeOnly = (arbitrageInputs.hedgeFactorMode ?? 'include_dd') === 'fee_only';
+  const effectiveHedgeFactor = protectDoubleLoss
+    ? Math.max(
+        0,
+        ((isFeeOnly ? 0 : inputs.remainingDrawdownUsd) +
+          arbitrageInputs.evaluationFeeUsd +
+          arbitrageInputs.additionalProfitUsd) /
+          inputs.remainingDrawdownUsd
+      )
+    : Math.max(0, hedgeFactor);
+
   // L_M = Stop_Max_USD / (Stop_Loss_Pontos * Valor_Ponto)
   const propFirmLot = inputs.remainingDrawdownUsd / (inputs.stopLossPoints * pointValue);
-  // L_C = L_M * F
-  const brokerHedgeLot = propFirmLot * Math.max(0, hedgeFactor);
+  // L_C = L_M * F_10:1
+  const brokerHedgeLot = propFirmLot * effectiveHedgeFactor;
   // Distância do Take Profit em pontos/pips para atingir o Alvo Curto com L_M
   const takeProfitPoints = inputs.shortTargetUsd / (propFirmLot * pointValue);
   const impliedNegativeRatio = inputs.remainingDrawdownUsd / inputs.shortTargetUsd;
 
   const splitRatio = arbitrageInputs.profitSplitPct / 100;
   const days = Math.max(1, Math.round(inputs.activeDaysTarget));
-  const isFeeOnly = (arbitrageInputs.hedgeFactorMode ?? 'include_dd') === 'fee_only';
 
-  // Dia Normal (Win)
+  // Dia Normal (Win na Prop Firm -> SL na Conta Hedge)
   const mesaGainUsd = inputs.shortTargetUsd;
-  const hedgeCostUsd = -(inputs.shortTargetUsd * hedgeFactor);
+  const hedgeCostUsd = -(inputs.shortTargetUsd * effectiveHedgeFactor);
   const netAfterSplitUsd = mesaGainUsd * splitRatio + hedgeCostUsd;
 
   const calendarMesaTotalUsd = mesaGainUsd * days;
   const calendarHedgeCostTotalUsd = hedgeCostUsd * days;
   const calendarNetAfterSplitUsd = calendarMesaTotalUsd * splitRatio + calendarHedgeCostTotalUsd;
 
-  // Dia de Falha / Cisne Negro (Stop atingido)
+  // Dia de Falha / Cisne Negro (SL 1:10 na Prop Firm -> TP 10:1 na Conta Hedge)
   const mesaLossUsd = isFeeOnly ? 0 : -inputs.remainingDrawdownUsd;
-  const brokerInsuranceGainUsd = inputs.remainingDrawdownUsd * hedgeFactor;
+  const brokerInsuranceGainUsd = inputs.remainingDrawdownUsd * effectiveHedgeFactor;
   const netBeforeFeeUsd = mesaLossUsd + brokerInsuranceGainUsd;
   const netAfterFeeUsd = netBeforeFeeUsd - arbitrageInputs.evaluationFeeUsd;
 
   return {
     isValid: true,
+    effectiveHedgeFactor,
     propFirmLot,
     brokerHedgeLot,
     takeProfitPoints,
@@ -853,6 +881,423 @@ export function calculateFundedMethod101(
     },
   };
 }
+
+export interface MonteCarloOptions extends RandomSimulationOptions {
+  numRuns?: number;
+  maxDays?: number;
+}
+
+function getQuantile(sorted: number[], q: number): number {
+  if (sorted.length === 0) return 0;
+  const pos = (sorted.length - 1) * q;
+  const base = Math.floor(pos);
+  const rest = pos - base;
+  if (sorted[base + 1] !== undefined) {
+    return sorted[base] + rest * (sorted[base + 1] - sorted[base]);
+  }
+  return sorted[base];
+}
+
+export function runMonteCarloSimulation(
+  firm: PropFirmPreset,
+  arbitrageInputs: ArbitrageInputs,
+  hedgeFactor: number,
+  options: MonteCarloOptions = {}
+): MonteCarloSummary {
+  const numRuns = Math.max(100, Math.min(10000, Math.round(options.numRuns ?? 1000)));
+  const maxDays = Math.max(15, Math.min(90, Math.round(options.maxDays ?? 50)));
+
+  const sizingMode: RandomSizingMode = options.sizingMode ?? 'dd_max_meta_dias';
+  const evalWinRate = Math.max(5, Math.min(95, options.winRatePct ?? 58)) / 100;
+  const rr = Math.max(0.1, Math.min(6, options.rewardToRisk ?? 0.75));
+  const daysDivisor = Math.max(1, Math.round(options.minDaysDivisor ?? Math.max(1, firm.minTradingDays)));
+  const ddLimit = Math.max(50, arbitrageInputs.drawdownUsd);
+  const fallbackRisk = Math.max(50, Math.round(ddLimit * 0.2));
+  const baseRisk = Math.max(25, options.baseRiskUsd ?? fallbackRisk);
+  const hedgeDuringFunded = options.hedgeDuringFunded ?? true;
+  const protectDoubleLoss = options.protectDoubleLoss ?? true;
+  const isFeeOnly = (arbitrageInputs.hedgeFactorMode ?? 'include_dd') === 'fee_only';
+  const splitRatio = arbitrageInputs.profitSplitPct / 100;
+  const evalFee = arbitrageInputs.evaluationFeeUsd;
+  const addProfit = arbitrageInputs.additionalProfitUsd;
+  const feeRefundAmount = arbitrageInputs.refundOnFirstPayout ? evalFee : 0;
+
+  const funded101Enabled = options.funded101Enabled ?? true;
+  const fundedShortTarget = Math.max(50, options.fundedShortTargetUsd ?? 150);
+  const fundedActiveDays = Math.max(
+    firm.minTradingDays,
+    Math.max(1, Math.round(options.fundedActiveDaysTarget ?? Math.max(5, firm.minTradingDays)))
+  );
+  const fundedStopMax = Math.max(50, options.fundedStopMaxUsd ?? ddLimit);
+  const fundedWinRate = Math.max(50, Math.min(99, options.fundedWinRatePct ?? 92)) / 100;
+
+  const phase1Target =
+    firm.phase1TargetUsd > 0 ? firm.phase1TargetUsd : arbitrageInputs.totalTargetUsd;
+  const phase2Target = firm.phase2TargetUsd;
+  const fundedTarget = funded101Enabled
+    ? fundedShortTarget * fundedActiveDays
+    : Math.max(100, arbitrageInputs.payoutGrossProfitUsd);
+
+  const getTargetForPhase = (phase: JourneyPhase) => {
+    if (phase === 'Fase 1') return phase1Target;
+    if (phase === 'Fase 2') return phase2Target;
+    return fundedTarget;
+  };
+
+  const computeFloor = (hwm: number) => {
+    if (firm.drawdownType === 'Estático') {
+      return firm.accountSize - ddLimit;
+    }
+    return Math.min(firm.accountSize, hwm - ddLimit);
+  };
+
+  interface RunResult {
+    id: number;
+    status: JourneyStatus;
+    stoppedInEval: boolean;
+    stoppedInFunded: boolean;
+    passedEval: boolean;
+    finalNetUsd: number;
+    daysTaken: number;
+    maxBrokerOutlayUsd: number;
+    series: number[];
+  }
+
+  const results: RunResult[] = new Array(numRuns);
+  let longestDay = 1;
+
+  for (let r = 0; r < numRuns; r++) {
+    let currentPhase: JourneyPhase = 'Fase 1';
+    let status: JourneyStatus = 'Em Andamento';
+    let phaseEquity = firm.accountSize;
+    let phaseHighWaterMark = firm.accountSize;
+    let daysInPhase = 0;
+    let totalPosInPhase = 0;
+    let maxPosDayInPhase = 0;
+    let brokerCumulativePnl = 0;
+    let passedEval = false;
+    let stoppedInEval = false;
+    let stoppedInFunded = false;
+    let maxBrokerOutlayUsd = evalFee;
+    let finalNetUsd = -evalFee;
+    let daysTaken = 0;
+    const series: number[] = [];
+
+    for (let day = 1; day <= maxDays; day++) {
+      if (status !== 'Em Andamento') break;
+
+      const activePhase = currentPhase;
+      const isHedgeActiveToday = activePhase !== 'Funded' || hedgeDuringFunded;
+      const floorBefore = computeFloor(phaseHighWaterMark);
+      const remainingToFloorBefore = Math.max(10, phaseEquity - floorBefore);
+      const effectiveLiquidationLoss =
+        firm.dailyLossLimitUsd > 0
+          ? Math.min(remainingToFloorBefore, firm.dailyLossLimitUsd)
+          : remainingToFloorBefore;
+
+      const isFunded101Day = activePhase === 'Funded' && funded101Enabled;
+      const slRiskDenominator = isFunded101Day
+        ? Math.min(effectiveLiquidationLoss, fundedStopMax)
+        : effectiveLiquidationLoss;
+
+      let appliedHedgeFactor = 0;
+      if (isHedgeActiveToday) {
+        if (protectDoubleLoss) {
+          const projectedLossOnStop = isFeeOnly
+            ? 0
+            : ddLimit - remainingToFloorBefore + slRiskDenominator;
+          const neededBrokerGain =
+            projectedLossOnStop + evalFee + addProfit - brokerCumulativePnl;
+          appliedHedgeFactor = Math.max(0, neededBrokerGain / slRiskDenominator);
+        } else {
+          appliedHedgeFactor = hedgeFactor;
+        }
+      }
+
+      const phaseTarget = getTargetForPhase(activePhase);
+
+      let tpUsd = Math.round(phaseTarget / daysDivisor);
+      let slUsd = Math.round(ddLimit);
+
+      if (isFunded101Day) {
+        tpUsd = Math.round(fundedShortTarget);
+        slUsd = Math.round(Math.min(fundedStopMax, remainingToFloorBefore));
+      } else if (sizingMode === 'dd_max_meta_dias') {
+        tpUsd = Math.max(10, Math.round(phaseTarget / daysDivisor));
+        slUsd = Math.round(ddLimit);
+      } else if (sizingMode === 'dd_max_rr') {
+        slUsd = Math.round(ddLimit);
+        tpUsd = Math.max(10, Math.round(slUsd * rr));
+      } else if (sizingMode === 'meta_dias_rr') {
+        tpUsd = Math.max(10, Math.round(phaseTarget / daysDivisor));
+        slUsd = Math.max(10, Math.round(tpUsd / rr));
+      } else {
+        const variance = 0.65 + Math.random() * 0.75;
+        slUsd = Math.round((baseRisk * variance) / 10) * 10;
+        tpUsd = Math.round((baseRisk * rr * variance) / 10) * 10;
+      }
+
+      const isWin = Math.random() < (isFunded101Day ? fundedWinRate : evalWinRate);
+      const mesaPnlUsd = isWin ? tpUsd : -Math.min(slUsd, remainingToFloorBefore);
+      const intradayPeakOffsetUsd =
+        firm.drawdownType === 'Trailing Intradiário'
+          ? Math.round(tpUsd * (0.25 + Math.random() * 0.6))
+          : isWin
+          ? Math.round(tpUsd * (0.05 + Math.random() * 0.15))
+          : 0;
+
+      const brokerDailyPnl = isHedgeActiveToday ? -mesaPnlUsd * appliedHedgeFactor : 0;
+      brokerCumulativePnl += brokerDailyPnl;
+      maxBrokerOutlayUsd = Math.max(maxBrokerOutlayUsd, evalFee - brokerCumulativePnl);
+
+      daysInPhase += 1;
+      daysTaken = day;
+
+      let effectiveHwm = phaseHighWaterMark;
+      if (firm.drawdownType === 'Trailing Intradiário' && intradayPeakOffsetUsd > 0) {
+        effectiveHwm = Math.max(effectiveHwm, phaseEquity + intradayPeakOffsetUsd);
+      }
+
+      const nextEquity = phaseEquity + mesaPnlUsd;
+      if (firm.drawdownType === 'Trailing EOD' || firm.drawdownType === 'Trailing Intradiário') {
+        effectiveHwm = Math.max(effectiveHwm, nextEquity);
+      }
+
+      const floorUsd = computeFloor(effectiveHwm);
+      const phasePnl = nextEquity - firm.accountSize;
+
+      if (mesaPnlUsd > 0) {
+        totalPosInPhase += mesaPnlUsd;
+        if (mesaPnlUsd > maxPosDayInPhase) maxPosDayInPhase = mesaPnlUsd;
+      }
+
+      const violatedDaily =
+        firm.dailyLossLimitUsd > 0 && mesaPnlUsd <= -firm.dailyLossLimitUsd;
+      const violatedFloor = nextEquity <= floorUsd;
+
+      if (violatedDaily || violatedFloor) {
+        status = 'Reprovado (Stop)';
+        if (activePhase === 'Funded') {
+          stoppedInFunded = true;
+        } else {
+          stoppedInEval = true;
+        }
+        phaseEquity = nextEquity;
+        phaseHighWaterMark = effectiveHwm;
+      } else {
+        phaseEquity = nextEquity;
+        phaseHighWaterMark = effectiveHwm;
+
+        const requiredDays = activePhase === 'Funded' ? fundedActiveDays : firm.minTradingDays;
+        const metTarget =
+          activePhase === 'Funded' && funded101Enabled
+            ? phasePnl > 0
+            : phasePnl >= phaseTarget;
+        const metMinDays = daysInPhase >= requiredDays;
+        const consistencyPct = totalPosInPhase > 0 ? (maxPosDayInPhase / totalPosInPhase) * 100 : 0;
+        const consistencyOk =
+          firm.consistencyRulePct === null || consistencyPct <= firm.consistencyRulePct;
+
+        if (metTarget && metMinDays && consistencyOk) {
+          if (activePhase === 'Fase 1') {
+            const nextPhase: JourneyPhase = phase2Target > 0 ? 'Fase 2' : 'Funded';
+            if (nextPhase === 'Funded') passedEval = true;
+            currentPhase = nextPhase;
+            phaseEquity = firm.accountSize;
+            phaseHighWaterMark = firm.accountSize;
+            daysInPhase = 0;
+            totalPosInPhase = 0;
+            maxPosDayInPhase = 0;
+          } else if (activePhase === 'Fase 2') {
+            passedEval = true;
+            currentPhase = 'Funded';
+            phaseEquity = firm.accountSize;
+            phaseHighWaterMark = firm.accountSize;
+            daysInPhase = 0;
+            totalPosInPhase = 0;
+            maxPosDayInPhase = 0;
+          } else {
+            status = 'Aprovado para Saque';
+          }
+        }
+      }
+
+      let combinedNet = brokerCumulativePnl - evalFee;
+      if (status === 'Reprovado (Stop)' && !isFeeOnly) {
+        combinedNet -= ddLimit;
+      } else if (status === 'Aprovado para Saque') {
+        const grossPayout = Math.max(0, phasePnl) * splitRatio;
+        combinedNet = grossPayout + feeRefundAmount + brokerCumulativePnl;
+      }
+
+      finalNetUsd = combinedNet;
+      series.push(combinedNet);
+    }
+
+    if (series.length > longestDay) longestDay = series.length;
+
+    results[r] = {
+      id: r,
+      status,
+      stoppedInEval,
+      stoppedInFunded,
+      passedEval,
+      finalNetUsd,
+      daysTaken,
+      maxBrokerOutlayUsd,
+      series,
+    };
+  }
+
+  let payoutCount = 0;
+  let stopInEvalCount = 0;
+  let stopInFundedCount = 0;
+  let incompleteCount = 0;
+  let evalPassedCount = 0;
+  let negativeOutcomeCount = 0;
+
+  let sumNet = 0;
+  let sumDays = 0;
+  let sumOutlay = 0;
+  let sumPayoutNet = 0;
+  let sumStopNet = 0;
+
+  const finalNets: number[] = new Array(numRuns);
+  const outlays: number[] = new Array(numRuns);
+
+  for (let i = 0; i < numRuns; i++) {
+    const res = results[i];
+    finalNets[i] = res.finalNetUsd;
+    outlays[i] = res.maxBrokerOutlayUsd;
+    sumNet += res.finalNetUsd;
+    sumDays += res.daysTaken;
+    sumOutlay += res.maxBrokerOutlayUsd;
+    if (res.finalNetUsd < 0) negativeOutcomeCount++;
+    if (res.passedEval) evalPassedCount++;
+    if (res.status === 'Aprovado para Saque') {
+      payoutCount++;
+      sumPayoutNet += res.finalNetUsd;
+    } else if (res.status === 'Reprovado (Stop)') {
+      sumStopNet += res.finalNetUsd;
+      if (res.stoppedInFunded) stopInFundedCount++;
+      else stopInEvalCount++;
+    } else {
+      incompleteCount++;
+    }
+  }
+
+  const sortedNets = [...finalNets].sort((a, b) => a - b);
+  const sortedOutlays = [...outlays].sort((a, b) => a - b);
+
+  const expectedNetUsd = sumNet / numRuns;
+  const medianNetUsd = getQuantile(sortedNets, 0.5);
+  const p10NetUsd = getQuantile(sortedNets, 0.1);
+  const p90NetUsd = getQuantile(sortedNets, 0.9);
+  const minNetUsd = sortedNets[0] ?? 0;
+  const maxNetUsd = sortedNets[sortedNets.length - 1] ?? 0;
+  const p95MaxBrokerOutlayUsd = getQuantile(sortedOutlays, 0.95);
+
+  const stopCount = stopInEvalCount + stopInFundedCount;
+  const avgPayoutNetUsd = payoutCount > 0 ? sumPayoutNet / payoutCount : 0;
+  const avgStopNetUsd = stopCount > 0 ? sumStopNet / stopCount : 0;
+
+  // Build daily percentile curves (carrying forward completed runs' final net)
+  const percentilesByDay: MonteCarloPercentilePoint[] = [];
+  const dayValues = new Array<number>(numRuns);
+  for (let d = 0; d < longestDay; d++) {
+    for (let r = 0; r < numRuns; r++) {
+      const s = results[r].series;
+      dayValues[r] = d < s.length ? s[d] : s[s.length - 1] ?? results[r].finalNetUsd;
+    }
+    const sortedDay = [...dayValues].sort((a, b) => a - b);
+    percentilesByDay.push({
+      day: d + 1,
+      p10: getQuantile(sortedDay, 0.1),
+      p50: getQuantile(sortedDay, 0.5),
+      p90: getQuantile(sortedDay, 0.9),
+    });
+  }
+
+  // Stratified sample of 24 paths sorted by final net outcome
+  const sortedResults = [...results].sort((a, b) => a.finalNetUsd - b.finalNetUsd);
+  const sampleCount = Math.min(24, numRuns);
+  const samplePaths: MonteCarloSamplePath[] = [];
+  for (let i = 0; i < sampleCount; i++) {
+    const idx =
+      sampleCount === 1
+        ? 0
+        : Math.round((i / (sampleCount - 1)) * (sortedResults.length - 1));
+    const picked = sortedResults[idx];
+    samplePaths.push({
+      id: picked.id,
+      outcome: picked.status,
+      finalNetUsd: picked.finalNetUsd,
+      points: picked.series,
+    });
+  }
+
+  // Build 9-bin histogram
+  const binCount = 9;
+  const span = maxNetUsd - minNetUsd;
+  const histogram: MonteCarloHistogramBin[] = [];
+  if (span < 1) {
+    histogram.push({
+      label: formatUsd(minNetUsd, true),
+      minUsd: minNetUsd,
+      maxUsd: maxNetUsd,
+      count: numRuns,
+      pct: 100,
+    });
+  } else {
+    const step = span / binCount;
+    const counts = new Array<number>(binCount).fill(0);
+    for (let i = 0; i < numRuns; i++) {
+      const val = finalNets[i];
+      const rawBin = Math.floor((val - minNetUsd) / step);
+      const binIdx = Math.max(0, Math.min(binCount - 1, rawBin));
+      counts[binIdx] += 1;
+    }
+    for (let b = 0; b < binCount; b++) {
+      const binMin = minNetUsd + b * step;
+      const binMax = minNetUsd + (b + 1) * step;
+      const mid = (binMin + binMax) / 2;
+      histogram.push({
+        label: `${mid >= 0 ? '+' : '-'}$${Math.round(Math.abs(mid))}`,
+        minUsd: binMin,
+        maxUsd: binMax,
+        count: counts[b],
+        pct: (counts[b] / numRuns) * 100,
+      });
+    }
+  }
+
+  return {
+    numRuns,
+    evalPassRatePct: (evalPassedCount / numRuns) * 100,
+    payoutSuccessRatePct: (payoutCount / numRuns) * 100,
+    stopOutRatePct: (stopCount / numRuns) * 100,
+    stopInEvalCount,
+    stopInFundedCount,
+    payoutCount,
+    incompleteCount,
+    expectedNetUsd,
+    medianNetUsd,
+    p10NetUsd,
+    p90NetUsd,
+    minNetUsd,
+    maxNetUsd,
+    negativeOutcomeRatePct: (negativeOutcomeCount / numRuns) * 100,
+    avgDaysToFinish: sumDays / numRuns,
+    avgMaxBrokerOutlayUsd: sumOutlay / numRuns,
+    p95MaxBrokerOutlayUsd,
+    avgPayoutNetUsd,
+    avgStopNetUsd,
+    samplePaths,
+    percentilesByDay,
+    histogram,
+  };
+}
+
 
 
 
