@@ -1,10 +1,4 @@
-import {
-  Activity,
-  Dices,
-  MessageSquare,
-  ShieldCheck,
-  TrendingUp,
-} from 'lucide-react';
+import { AlertTriangle, Activity, Dices, MessageSquare, ShieldCheck, TrendingUp } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ArbitrageInputs,
@@ -14,6 +8,7 @@ import {
   PropFirmPreset,
   RandomSizingMode,
 } from '../types/quant';
+import { validateFirmContract } from '../utils/contractual';
 import {
   formatFactor,
   formatUsd,
@@ -29,6 +24,8 @@ interface MonteCarloModuleProps {
   onToggleHedgeDuringFunded: () => void;
   protectDoubleLoss: boolean;
   onToggleProtectDoubleLoss: () => void;
+  requireHedgeCoverageForPayout: boolean;
+  onToggleRequireHedgeCoverageForPayout: () => void;
   funded101Enabled: boolean;
   onToggleFunded101: () => void;
   funded101Inputs: FundedMethod101Inputs;
@@ -48,6 +45,8 @@ export function MonteCarloModule({
   onToggleHedgeDuringFunded,
   protectDoubleLoss,
   onToggleProtectDoubleLoss,
+  requireHedgeCoverageForPayout,
+  onToggleRequireHedgeCoverageForPayout,
   funded101Enabled,
   onToggleFunded101,
   funded101Inputs,
@@ -60,6 +59,7 @@ export function MonteCarloModule({
   const [winRatePct, setWinRatePct] = useState<number>(58);
   const [rewardToRisk, setRewardToRisk] = useState<number>(0.75);
   const [minDaysDivisor, setMinDaysDivisor] = useState<number>(Math.max(1, firm.minTradingDays));
+  const [seedInput, setSeedInput] = useState<string>('202611');
   const [runNonce, setRunNonce] = useState<number>(1);
   const [hoveredBinIndex, setHoveredBinIndex] = useState<number | null>(null);
 
@@ -67,10 +67,20 @@ export function MonteCarloModule({
     setMinDaysDivisor(Math.max(1, firm.minTradingDays));
   }, [firm.id, firm.minTradingDays]);
 
+  const contractValidation = useMemo(() => validateFirmContract(firm), [firm]);
+
+  const parsedSeed = useMemo(() => {
+    const trimmed = seedInput.trim();
+    if (!trimmed) return undefined;
+    const n = Number(trimmed);
+    return Number.isFinite(n) ? Math.trunc(n) : undefined;
+  }, [seedInput]);
+
   const summary = useMemo(() => {
-    void runNonce;
+    const effectiveSeed = parsedSeed !== undefined ? parsedSeed + (runNonce - 1) : undefined;
     return runMonteCarloSimulation(firm, arbitrageInputs, hedgeFactor, {
       numRuns,
+      seed: effectiveSeed,
       sizingMode,
       winRatePct,
       rewardToRisk,
@@ -83,8 +93,10 @@ export function MonteCarloModule({
       fundedActiveDaysTarget: funded101Inputs.activeDaysTarget,
       fundedStopMaxUsd: funded101Inputs.remainingDrawdownUsd,
       protectDoubleLoss,
+      requireHedgeCoverageForPayout,
     });
   }, [
+    parsedSeed,
     runNonce,
     firm,
     arbitrageInputs,
@@ -102,6 +114,7 @@ export function MonteCarloModule({
     funded101Inputs.activeDaysTarget,
     funded101Inputs.remainingDrawdownUsd,
     protectDoubleLoss,
+    requireHedgeCoverageForPayout,
   ]);
 
   useEffect(() => {
@@ -205,6 +218,19 @@ export function MonteCarloModule({
           </button>
         </div>
       </div>
+
+      {!contractValidation.isCompleteForSimulation && (
+        <div
+          role="alert"
+          className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-5 py-3 text-xs text-amber-800 dark:text-amber-200 flex items-start gap-2.5"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <span className="font-semibold">Contrato incompleto para simulação estrita:</span>{' '}
+            {contractValidation.missingCriticalFields.join(' · ')}.
+          </div>
+        </div>
+      )}
 
       {/* 4-Column KPI Strip */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -320,6 +346,30 @@ export function MonteCarloModule({
                     </button>
                   );
                 })}
+              </div>
+              <div className="mt-3 flex items-center justify-between gap-2">
+                <label
+                  htmlFor="mc-seed-input"
+                  className="text-[11px] text-slate-500 dark:text-slate-400"
+                >
+                  Seed PRNG (reprodutibilidade)
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    id="mc-seed-input"
+                    type="number"
+                    value={seedInput}
+                    onChange={(e) => {
+                      setSeedInput(e.target.value);
+                      setRunNonce(1);
+                    }}
+                    placeholder="Aleatória"
+                    className="h-8 w-28 rounded-md border border-slate-300 bg-slate-50 px-2 font-mono text-xs text-slate-900 focus:border-emerald-500 focus:outline-none dark:border-slate-700 dark:bg-[#0B0F17] dark:text-slate-100"
+                  />
+                  <span className="font-mono text-[10px] text-slate-400">
+                    #{summary.seedUsed}
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -587,6 +637,43 @@ export function MonteCarloModule({
                   />
                 </button>
               </div>
+
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                <div>
+                  <span className="block text-[11px] font-medium text-slate-700 dark:text-slate-200">
+                    Continuar Ciclos até Ficar Positivo
+                  </span>
+                  <span className="block text-[10px] text-slate-500 dark:text-slate-400">
+                    Executa saques intermediários e segue na Funded até consolidado &gt; $0
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={requireHedgeCoverageForPayout}
+                  aria-label="Continuar ciclos de saque na Funded até o saldo consolidado ficar positivo"
+                  onClick={onToggleRequireHedgeCoverageForPayout}
+                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                    requireHedgeCoverageForPayout
+                      ? 'bg-emerald-600'
+                      : 'bg-slate-300 dark:bg-slate-700'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                      requireHedgeCoverageForPayout ? 'translate-x-4.5' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {requireHedgeCoverageForPayout && hedgeDuringFunded && (
+                <div className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-2.5 py-2 text-[10px] text-sky-900 dark:text-sky-200">
+                  <strong>Multi-ciclos ativo:</strong> cada saque intermediário na Funded abate o
+                  custo acumulado do hedge e reduz o fator <strong>F</strong> no ciclo seguinte até
+                  o consolidado ficar positivo (&gt; $0).
+                </div>
+              )}
             </div>
 
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-[11px] text-slate-600 dark:border-slate-800 dark:bg-[#0B0F17] dark:text-slate-400 flex items-center justify-between">

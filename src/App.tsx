@@ -22,6 +22,7 @@ import {
   TradeSizingInputs,
   WorkspaceSection,
 } from './types/quant';
+import { normalizePropFirmPreset, validateFirmContract } from './utils/contractual';
 import {
   calculateArbitrage,
   calculateCapitalBonus,
@@ -40,6 +41,8 @@ const STORAGE_KEYS = {
   simulations: 'propquant_simulations_v1',
 };
 
+const CURRENT_CATALOG_VERSION = '2026-nov-contractual-v3';
+
 function loadStoredJson<T>(key: string, fallback: T): T {
   try {
     const raw = window.localStorage.getItem(key);
@@ -51,19 +54,43 @@ function loadStoredJson<T>(key: string, fallback: T): T {
 }
 
 function loadMergedFirms(): PropFirmPreset[] {
-  const stored = loadStoredJson<PropFirmPreset[] | null>(STORAGE_KEYS.firms, null);
+  const stored = loadStoredJson<Array<Partial<PropFirmPreset> & { id: string; name: string; model: string }> | null>(
+    STORAGE_KEYS.firms,
+    null
+  );
   if (!stored || !Array.isArray(stored) || stored.length === 0) {
-    window.localStorage.setItem(STORAGE_KEYS.firmsCatalogVersion, '2026-nov-10k-25k');
+    window.localStorage.setItem(STORAGE_KEYS.firmsCatalogVersion, CURRENT_CATALOG_VERSION);
     return DEFAULT_PROP_FIRMS_2026;
   }
+
   const version = window.localStorage.getItem(STORAGE_KEYS.firmsCatalogVersion);
-  if (version === '2026-nov-10k-25k') {
-    return stored;
+  if (version === CURRENT_CATALOG_VERSION) {
+    return stored.map((item) => normalizePropFirmPreset(item));
   }
-  const existingIds = new Set(stored.map((f) => f.id));
-  const missing = DEFAULT_PROP_FIRMS_2026.filter((f) => !existingIds.has(f.id));
-  window.localStorage.setItem(STORAGE_KEYS.firmsCatalogVersion, '2026-nov-10k-25k');
-  return [...stored, ...missing];
+
+  // Upgrade catalog safely: preserve custom firms and user-assumed overrides while upgrading official presets
+  const defaultsMap = new Map(DEFAULT_PROP_FIRMS_2026.map((f) => [f.id, f]));
+  const migrated: PropFirmPreset[] = [];
+  const seenIds = new Set<string>();
+
+  for (const raw of stored) {
+    const normalized = normalizePropFirmPreset(raw);
+    seenIds.add(normalized.id);
+    if (normalized.isCustom || normalized.verificationStatus === 'user_assumed') {
+      migrated.push(normalized);
+    } else {
+      migrated.push(defaultsMap.get(normalized.id) ?? normalized);
+    }
+  }
+
+  for (const def of DEFAULT_PROP_FIRMS_2026) {
+    if (!seenIds.has(def.id)) {
+      migrated.push(def);
+    }
+  }
+
+  window.localStorage.setItem(STORAGE_KEYS.firmsCatalogVersion, CURRENT_CATALOG_VERSION);
+  return migrated;
 }
 
 export default function App() {
@@ -91,6 +118,7 @@ export default function App() {
       hedgeFactorMode: 'include_dd',
       drawdownUsd: first.maxDrawdownUsd,
       evaluationFeeUsd: first.evaluationFeeUsd,
+      activationFeeUsd: first.activationFeeUsd,
       additionalProfitUsd: 150,
       totalTargetUsd: first.phase1TargetUsd + first.phase2TargetUsd,
       payoutGrossProfitUsd: 4000,
@@ -121,6 +149,8 @@ export default function App() {
 
   const [protectDoubleLoss, setProtectDoubleLoss] = useState(true);
 
+  const [requireHedgeCoverageForPayout, setRequireHedgeCoverageForPayout] = useState(true);
+
   const [funded101Enabled, setFunded101Enabled] = useState(true);
 
   const [funded101Inputs, setFunded101Inputs] = useState<FundedMethod101Inputs>(() => ({
@@ -138,6 +168,7 @@ export default function App() {
         hedgeFactorMode: 'include_dd',
         drawdownUsd: DEFAULT_PROP_FIRMS_2026[0].maxDrawdownUsd,
         evaluationFeeUsd: DEFAULT_PROP_FIRMS_2026[0].evaluationFeeUsd,
+        activationFeeUsd: DEFAULT_PROP_FIRMS_2026[0].activationFeeUsd,
         additionalProfitUsd: 150,
         totalTargetUsd:
           DEFAULT_PROP_FIRMS_2026[0].phase1TargetUsd + DEFAULT_PROP_FIRMS_2026[0].phase2TargetUsd,
@@ -149,6 +180,11 @@ export default function App() {
         enabled: true,
         activeDaysTarget: Math.max(5, DEFAULT_PROP_FIRMS_2026[0].minTradingDays),
         shortTargetUsd: 150,
+      },
+      {
+        hedgeDuringFunded: true,
+        protectDoubleLoss: true,
+        requireHedgeCoverageForPayout: true,
       }
     )
   );
@@ -220,7 +256,8 @@ export default function App() {
             arbitrageOutputs.hedgeFactor,
             hedgeDuringFunded,
             funded101Config,
-            protectDoubleLoss
+            protectDoubleLoss,
+            requireHedgeCoverageForPayout
           )
         : null,
     [
@@ -231,6 +268,7 @@ export default function App() {
       hedgeDuringFunded,
       funded101Config,
       protectDoubleLoss,
+      requireHedgeCoverageForPayout,
     ]
   );
 
@@ -254,6 +292,11 @@ export default function App() {
     ]
   );
 
+  const contractValidation = useMemo(
+    () => (activeFirm ? validateFirmContract(activeFirm) : null),
+    [activeFirm]
+  );
+
   const applyFirmToSimulation = (firm: PropFirmPreset) => {
     setSelectedFirmId(firm.id);
     const totalTarget = firm.phase1TargetUsd + firm.phase2TargetUsd;
@@ -261,6 +304,7 @@ export default function App() {
       ...arbitrageInputs,
       drawdownUsd: firm.maxDrawdownUsd,
       evaluationFeeUsd: firm.evaluationFeeUsd,
+      activationFeeUsd: firm.activationFeeUsd,
       totalTargetUsd: totalTarget,
       profitSplitPct: firm.profitSplitPct,
       refundOnFirstPayout: firm.refundOnFirstPayout,
@@ -277,11 +321,20 @@ export default function App() {
       activeDaysTarget: nextDays,
     }));
     setDailyEntries(
-      generateApprovalTrajectory(firm, nextArb, {
-        enabled: funded101Enabled,
-        activeDaysTarget: nextDays,
-        shortTargetUsd: funded101Inputs.shortTargetUsd,
-      })
+      generateApprovalTrajectory(
+        firm,
+        nextArb,
+        {
+          enabled: funded101Enabled,
+          activeDaysTarget: nextDays,
+          shortTargetUsd: funded101Inputs.shortTargetUsd,
+        },
+        {
+          hedgeDuringFunded,
+          protectDoubleLoss,
+          requireHedgeCoverageForPayout,
+        }
+      )
     );
   };
 
@@ -325,6 +378,7 @@ export default function App() {
       createdAt: new Date().toISOString(),
       firmName: activeFirm.name,
       firmModel: activeFirm.model,
+      contractVersion: activeFirm.contractVersion,
       arbitrageInputs: { ...arbitrageInputs },
       hedgeFactor: arbitrageOutputs.hedgeFactor,
       scenarioANet: arbitrageOutputs.scenarioA.netResult,
@@ -342,6 +396,7 @@ export default function App() {
   const handleLoadSimulation = (sim: SavedSimulation) => {
     setArbitrageInputs({
       ...sim.arbitrageInputs,
+      activationFeeUsd: sim.arbitrageInputs.activationFeeUsd ?? 0,
       hedgeFactorMode: sim.arbitrageInputs.hedgeFactorMode ?? 'include_dd',
     });
     setTradeSizingInputs((prev) => ({ ...prev, instrumentId: sim.instrumentId }));
@@ -364,11 +419,18 @@ export default function App() {
             nome: activeFirm.name,
             modelo: activeFirm.model,
             categoria: activeFirm.category,
+            tipoAvaliacao: activeFirm.evaluationType,
             contaUSD: activeFirm.accountSize,
-            tipoDrawdown: activeFirm.drawdownType,
-            consistenciaPct: activeFirm.consistencyRulePct,
+            drawdownAvaliacao: activeFirm.evaluationRules.maxDrawdown,
+            drawdownFunded: activeFirm.fundedRules.maxDrawdown,
+            consistenciaAvaliacao: activeFirm.evaluationRules.consistency,
+            consistenciaFunded: activeFirm.fundedRules.consistency,
+            taxaAtivacaoUSD: activeFirm.activationFeeUsd,
+            bufferLucroFundedUSD: activeFirm.fundedRules.profitBufferUsd.value,
             diasMinimos: activeFirm.minTradingDays,
             viabilidade: activeFirm.viability,
+            statusVerificacao: activeFirm.verificationStatus,
+            camposAusentesCriticos: contractValidation?.missingCriticalFields ?? [],
           }
         : null,
       modulo1Arbitragem: {
@@ -398,14 +460,17 @@ export default function App() {
       simulacaoDiaria: dailySummary
         ? {
             status: dailySummary.status,
+            estadoMaquina: dailySummary.lifecycleState,
             faseAtual: dailySummary.currentPhase,
             diasSimulados: dailySummary.totalDays,
+            taxasPagasTotaisUSD: dailySummary.feesPaidTotalUsd,
             protecaoAntiLossDuplo: protectDoubleLoss,
             hedgeAcumuladoUSD: Number(dailySummary.brokerCumulativePnlUsd.toFixed(2)),
             resultadoLiquidoFinalUSD: Number(dailySummary.finalNetOutcomeUsd.toFixed(2)),
             consistenciaAtualPct: dailySummary.consistencyRatioPct
               ? Number(dailySummary.consistencyRatioPct.toFixed(1))
               : null,
+            elegibilidadePayout: dailySummary.payoutEligibility,
           }
         : null,
       modulo5Funded10_1: {
@@ -443,6 +508,7 @@ export default function App() {
       capitalBonusInputs,
       capitalBonusOutputs,
       dailySummary,
+      contractValidation,
       protectDoubleLoss,
       funded101Enabled,
       hedgeDuringFunded,
@@ -479,6 +545,7 @@ export default function App() {
             <ArbitrageModule
               inputs={arbitrageInputs}
               outputs={arbitrageOutputs}
+              contractValidation={contractValidation}
               onChange={setArbitrageInputs}
               onConsultIntent={handleConsultIntent}
             />
@@ -518,6 +585,10 @@ export default function App() {
               onToggleHedgeDuringFunded={() => setHedgeDuringFunded((v) => !v)}
               protectDoubleLoss={protectDoubleLoss}
               onToggleProtectDoubleLoss={() => setProtectDoubleLoss((v) => !v)}
+              requireHedgeCoverageForPayout={requireHedgeCoverageForPayout}
+              onToggleRequireHedgeCoverageForPayout={() =>
+                setRequireHedgeCoverageForPayout((v) => !v)
+              }
               funded101Enabled={funded101Enabled}
               onToggleFunded101={() => setFunded101Enabled((v) => !v)}
               funded101Inputs={funded101Inputs}
@@ -556,7 +627,12 @@ export default function App() {
               }
               onLoadApprovalPreset={() =>
                 setDailyEntries(
-                  generateApprovalTrajectory(activeFirm, arbitrageInputs, funded101Config)
+                  generateApprovalTrajectory(activeFirm, arbitrageInputs, funded101Config, {
+                    hedgeFactor: arbitrageOutputs.hedgeFactor,
+                    hedgeDuringFunded,
+                    protectDoubleLoss,
+                    requireHedgeCoverageForPayout,
+                  })
                 )
               }
               onLoadStopOutPreset={() =>
@@ -577,6 +653,10 @@ export default function App() {
               onToggleHedgeDuringFunded={() => setHedgeDuringFunded((v) => !v)}
               protectDoubleLoss={protectDoubleLoss}
               onToggleProtectDoubleLoss={() => setProtectDoubleLoss((v) => !v)}
+              requireHedgeCoverageForPayout={requireHedgeCoverageForPayout}
+              onToggleRequireHedgeCoverageForPayout={() =>
+                setRequireHedgeCoverageForPayout((v) => !v)
+              }
               funded101Enabled={funded101Enabled}
               onToggleFunded101={() => setFunded101Enabled((v) => !v)}
               funded101Inputs={funded101Inputs}

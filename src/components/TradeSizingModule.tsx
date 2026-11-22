@@ -7,7 +7,12 @@ import {
   TradeSizingInputs,
   TradeSizingOutputs,
 } from '../types/quant';
-import { formatFactor, formatLot, formatUsd } from '../utils/quantEngine';
+import {
+  calculateTradeSizingSensitivityMatrix,
+  formatFactor,
+  formatLot,
+  formatUsd,
+} from '../utils/quantEngine';
 
 interface TradeSizingModuleProps {
   inputs: TradeSizingInputs;
@@ -39,8 +44,7 @@ export function TradeSizingModule({
     }
   };
 
-  // Sensitivity rows around the user's stop loss
-  const stopMultipliers = [0.5, 0.75, 1, 1.25, 1.5, 2];
+  const sensitivityRows = calculateTradeSizingSensitivityMatrix(inputs, outputs, hedgeFactor);
 
   return (
     <div className="space-y-8">
@@ -287,42 +291,37 @@ export function TradeSizingModule({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-800/80">
-                  {stopMultipliers.map((mult) => {
-                    const sl = Math.max(0.5, Number((inputs.stopLossPoints * mult).toFixed(1)));
-                    const lm =
-                      outputs.effectivePointValueUsd > 0
-                        ? inputs.desiredRiskUsd / (sl * outputs.effectivePointValueUsd)
-                        : 0;
-                    const lc = lm * hedgeFactor;
-                    const hedgeReturn = inputs.desiredRiskUsd * hedgeFactor;
-                    const isCurrent = mult === 1;
-                    return (
-                      <tr
-                        key={mult}
-                        className={
-                          isCurrent
-                            ? 'bg-emerald-500/5 font-medium'
-                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
-                        }
-                      >
-                        <td className="px-6 py-2.5 font-mono text-slate-900 dark:text-slate-100">
-                          {sl.toFixed(1)} {isCurrent && <span className="ml-2 text-xs font-sans text-emerald-600 dark:text-emerald-400">(Atual)</span>}
-                        </td>
-                        <td className="px-6 py-2.5 text-right font-mono text-slate-800 dark:text-slate-200">
-                          {formatLot(lm)}
-                        </td>
-                        <td className="px-6 py-2.5 text-right font-mono text-emerald-600 dark:text-emerald-400">
-                          {formatLot(lc)}
-                        </td>
-                        <td className="px-6 py-2.5 text-right font-mono text-red-600 dark:text-red-400">
-                          {formatUsd(-inputs.desiredRiskUsd)}
-                        </td>
-                        <td className="px-6 py-2.5 text-right font-mono text-emerald-600 dark:text-emerald-400">
-                          {formatUsd(hedgeReturn, true)}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {sensitivityRows.map((row) => (
+                    <tr
+                      key={row.stopLossPoints}
+                      className={
+                        row.isCurrent
+                          ? 'bg-emerald-500/5 font-medium'
+                          : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                      }
+                    >
+                      <td className="px-6 py-2.5 font-mono text-slate-900 dark:text-slate-100">
+                        {row.stopLossPoints.toFixed(1)}{' '}
+                        {row.isCurrent && (
+                          <span className="ml-2 text-xs font-sans text-emerald-600 dark:text-emerald-400">
+                            (Atual)
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-6 py-2.5 text-right font-mono text-slate-800 dark:text-slate-200">
+                        {formatLot(row.propFirmLot)}
+                      </td>
+                      <td className="px-6 py-2.5 text-right font-mono text-emerald-600 dark:text-emerald-400">
+                        {formatLot(row.brokerHedgeLot)}
+                      </td>
+                      <td className="px-6 py-2.5 text-right font-mono text-red-600 dark:text-red-400">
+                        {formatUsd(-row.mesaRiskUsd)}
+                      </td>
+                      <td className="px-6 py-2.5 text-right font-mono text-emerald-600 dark:text-emerald-400">
+                        {formatUsd(row.hedgeReturnOnStopUsd, true)}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>

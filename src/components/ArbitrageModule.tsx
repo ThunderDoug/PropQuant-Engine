@@ -1,10 +1,21 @@
-import { ArrowRight, Calculator, MessageSquare } from 'lucide-react';
-import { ArbitrageInputs, ArbitrageOutputs, ConsultIntent, HedgeFactorMode } from '../types/quant';
-import { formatFactor, formatUsd } from '../utils/quantEngine';
+import { AlertTriangle, ArrowRight, Calculator, MessageSquare } from 'lucide-react';
+import {
+  ArbitrageInputs,
+  ArbitrageOutputs,
+  ConsultIntent,
+  ContractualValidationResult,
+  HedgeFactorMode,
+} from '../types/quant';
+import {
+  calculateArbitragePayoffCurve,
+  formatFactor,
+  formatUsd,
+} from '../utils/quantEngine';
 
 interface ArbitrageModuleProps {
   inputs: ArbitrageInputs;
   outputs: ArbitrageOutputs;
+  contractValidation?: ContractualValidationResult | null;
   onChange: (next: ArbitrageInputs) => void;
   onConsultIntent: (intent: ConsultIntent, prompt: string) => void;
 }
@@ -12,6 +23,7 @@ interface ArbitrageModuleProps {
 export function ArbitrageModule({
   inputs,
   outputs,
+  contractValidation,
   onChange,
   onConsultIntent,
 }: ArbitrageModuleProps) {
@@ -19,27 +31,14 @@ export function ArbitrageModule({
     onChange({ ...inputs, [key]: value });
   };
 
-  // Build SVG Payoff Sensitivity Curve from -DD (Reprovação) to +Meta_Total (Aprovação)
   const dd = Math.max(1, inputs.drawdownUsd);
   const target = Math.max(1, inputs.totalTargetUsd);
   const f = outputs.isValid ? outputs.hedgeFactor : 1;
-
   const isFeeOnly = (inputs.hedgeFactorMode ?? 'include_dd') === 'fee_only';
-
-  // Curve points: X goes from -DD (Stop na Mesa) to +Meta_Total (Aprovação na Mesa)
-  const steps = 16;
   const xMin = -dd;
   const xMax = target;
-  const points = Array.from({ length: steps + 1 }, (_, i) => {
-    const mesaExcursion = xMin + ((xMax - xMin) * i) / steps;
-    const hedgePnl = -mesaExcursion * f;
-    // Em modo 'fee_only', o DD da mesa é virtual (sem saída real de caixa antes do payout),
-    // então o fluxo líquido real até o stop é hedgePnl - T (em -DD, resulta em +L_adic).
-    const combinedFloating = isFeeOnly
-      ? hedgePnl - inputs.evaluationFeeUsd
-      : mesaExcursion + hedgePnl - inputs.evaluationFeeUsd;
-    return { mesaExcursion, hedgePnl, combinedFloating };
-  });
+
+  const points = calculateArbitragePayoffCurve(inputs, outputs, 16);
 
   const allValues = points.flatMap((p) => [p.mesaExcursion, p.hedgePnl, p.combinedFloating]);
   const yMin = Math.min(...allValues, -dd * 1.1);
@@ -93,6 +92,19 @@ export function ArbitrageModule({
           className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-700 dark:text-red-300"
         >
           {outputs.validationError}
+        </div>
+      )}
+
+      {contractValidation && !contractValidation.isCompleteForSimulation && (
+        <div
+          role="alert"
+          className="flex items-start gap-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-800 dark:text-amber-200"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <span className="font-semibold">Contrato com campos críticos ausentes:</span>{' '}
+            {contractValidation.missingCriticalFields.join(' · ')}. Revise os valores manualmente ou cadastre premissas em Mesas &amp; Histórico.
+          </div>
         </div>
       )}
 
@@ -187,7 +199,7 @@ export function ArbitrageModule({
                 htmlFor="input-fee"
                 className="block text-xs font-medium text-slate-700 dark:text-slate-300"
               >
-                Taxa de Inscrição (T)
+                Taxa de Inscrição (T_eval)
               </label>
               <div className="relative mt-1.5">
                 <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-xs text-slate-400">
@@ -200,6 +212,29 @@ export function ArbitrageModule({
                   step="10"
                   value={inputs.evaluationFeeUsd}
                   onChange={(e) => updateField('evaluationFeeUsd', Number(e.target.value))}
+                  className="h-10 w-full rounded-lg border border-slate-300 bg-slate-50 pl-7 pr-3 font-mono text-sm text-slate-900 focus:border-emerald-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-[#0B0F17] dark:text-slate-100"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label
+                htmlFor="input-activation-fee"
+                className="block text-xs font-medium text-slate-700 dark:text-slate-300"
+              >
+                Taxa de Ativação Funded (T_act)
+              </label>
+              <div className="relative mt-1.5">
+                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-xs text-slate-400">
+                  $
+                </span>
+                <input
+                  id="input-activation-fee"
+                  type="number"
+                  min={0}
+                  step="10"
+                  value={inputs.activationFeeUsd}
+                  onChange={(e) => updateField('activationFeeUsd', Number(e.target.value))}
                   className="h-10 w-full rounded-lg border border-slate-300 bg-slate-50 pl-7 pr-3 font-mono text-sm text-slate-900 focus:border-emerald-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-[#0B0F17] dark:text-slate-100"
                 />
               </div>
@@ -429,13 +464,27 @@ export function ArbitrageModule({
                   </dd>
                 </div>
                 <div className="flex items-center justify-between">
+                  <dt className="text-slate-600 dark:text-slate-400">Taxa de Avaliação (-T_eval)</dt>
+                  <dd className="font-mono font-medium text-red-600 dark:text-red-400">
+                    {formatUsd(-outputs.scenarioB.evaluationFeePaid)}
+                  </dd>
+                </div>
+                {outputs.scenarioB.activationFeePaid > 0 && (
+                  <div className="flex items-center justify-between">
+                    <dt className="text-slate-600 dark:text-slate-400">Taxa de Ativação (-T_act)</dt>
+                    <dd className="font-mono font-medium text-red-600 dark:text-red-400">
+                      {formatUsd(-outputs.scenarioB.activationFeePaid)}
+                    </dd>
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
                   <dt className="text-slate-600 dark:text-slate-400">Payout Bruto da Mesa</dt>
                   <dd className="font-mono font-medium text-emerald-600 dark:text-emerald-400">
                     {formatUsd(outputs.scenarioB.grossPayout, true)}
                   </dd>
                 </div>
                 <div className="flex items-center justify-between">
-                  <dt className="text-slate-600 dark:text-slate-400">Reembolso da Taxa (+T)</dt>
+                  <dt className="text-slate-600 dark:text-slate-400">Reembolso da Taxa (+T_eval)</dt>
                   <dd className="font-mono font-medium text-slate-700 dark:text-slate-300">
                     {formatUsd(outputs.scenarioB.feeRefund, true)}
                   </dd>

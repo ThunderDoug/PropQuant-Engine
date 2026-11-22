@@ -25,7 +25,7 @@ export function CapitalBonusModule({
   onChange,
   onConsultIntent,
 }: CapitalBonusModuleProps) {
-  const realCoverageInsufficient = outputs.realDepositUsd < drawdownUsd * hedgeFactor;
+  const realCoverageInsufficient = outputs.realCoverageInsufficient;
 
   return (
     <div className="space-y-8">
@@ -289,24 +289,24 @@ export function CapitalBonusModule({
                       label: 'Sem Bônus (Conta Pura)',
                       formula: 'Equidade / 1.0',
                       deposit: outputs.comparison.noBonusDeposit,
-                      credit: 0,
-                      savings: 0,
+                      credit: outputs.comparison.noBonusCredit,
+                      savings: outputs.comparison.noBonusSavings,
                       isActive: inputs.bonusType === 'none',
                     },
                     {
                       label: 'Bônus 50% (ex: Vantage Markets)',
                       formula: 'Equidade / 1.5',
                       deposit: outputs.comparison.bonus50Deposit,
-                      credit: outputs.requiredEquityUsd - outputs.comparison.bonus50Deposit,
-                      savings: outputs.requiredEquityUsd - outputs.comparison.bonus50Deposit,
+                      credit: outputs.comparison.bonus50Credit,
+                      savings: outputs.comparison.bonus50Savings,
                       isActive: inputs.bonusType === 'bonus_50',
                     },
                     {
                       label: 'Bônus 100% (ex: Switch Markets)',
                       formula: 'Equidade / 2.0',
                       deposit: outputs.comparison.bonus100Deposit,
-                      credit: outputs.requiredEquityUsd - outputs.comparison.bonus100Deposit,
-                      savings: outputs.requiredEquityUsd - outputs.comparison.bonus100Deposit,
+                      credit: outputs.comparison.bonus100Credit,
+                      savings: outputs.comparison.bonus100Savings,
                       isActive: inputs.bonusType === 'bonus_100',
                     },
                   ].map((row) => (

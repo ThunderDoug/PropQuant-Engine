@@ -12,12 +12,22 @@ import {
 import { useState } from 'react';
 import {
   ArbitrageViability,
+  ConsistencyMethodology,
   ConsultIntent,
-  DrawdownType,
+  DrawdownMethodology,
   PropFirmCategory,
   PropFirmPreset,
   SavedSimulation,
+  VerificationStatus,
 } from '../types/quant';
+import {
+  buildFirmPreset,
+  makeConsistencyRule,
+  makeDailyLossRule,
+  makeDrawdownRule,
+  makeUserAssumed,
+  validateFirmContract,
+} from '../utils/contractual';
 import { exportSimulationsToCsv, formatFactor, formatLot, formatUsd } from '../utils/quantEngine';
 
 interface PropFirmsModuleProps {
@@ -34,27 +44,247 @@ interface PropFirmsModuleProps {
   onConsultIntent: (intent: ConsultIntent, prompt: string) => void;
 }
 
-const EMPTY_FIRM: PropFirmPreset = {
-  id: '',
-  name: '',
-  model: '',
-  category: 'CFD / Forex',
-  accountSize: 100000,
-  phase1TargetUsd: 8000,
-  phase2TargetUsd: 5000,
-  dailyLossLimitUsd: 5000,
-  maxDrawdownUsd: 10000,
-  drawdownType: 'Estático',
-  minTradingDays: 0,
-  profitSplitPct: 80,
-  consistencyRulePct: null,
-  evaluationFeeUsd: 400,
-  refundOnFirstPayout: true,
-  viability: 'Ideal',
-  rulesSummary: '',
-  operationalAlert: '',
-  isCustom: true,
-};
+interface FirmFormState {
+  id: string;
+  isCustom: boolean;
+  name: string;
+  model: string;
+  category: PropFirmCategory;
+  accountSize: number;
+  phase1TargetUsd: number;
+  phase2TargetUsd: number;
+  dailyLossLimitUsd: number;
+  evalMaxDrawdownUsd: number;
+  evalDrawdownMethod: DrawdownMethodology;
+  fundedMaxDrawdownUsd: number;
+  fundedDrawdownMethod: DrawdownMethodology;
+  minTradingDays: number;
+  evalConsistencyPct: string;
+  fundedConsistencyPct: string;
+  evaluationFeeUsd: number;
+  activationFeeUsd: number;
+  profitSplitPct: number;
+  refundOnFirstPayout: boolean;
+  profitBufferUsd: number;
+  minProfitableDays: number;
+  minDailyProfitUsd: number;
+  minWithdrawalUsd: number;
+  maxPayoutUsd: string;
+  viability: ArbitrageViability;
+  rulesSummary: string;
+  operationalAlert: string;
+}
+
+function createEmptyForm(): FirmFormState {
+  return {
+    id: `custom-${Date.now()}`,
+    isCustom: true,
+    name: '',
+    model: '',
+    category: 'CFD / Forex',
+    accountSize: 100000,
+    phase1TargetUsd: 8000,
+    phase2TargetUsd: 5000,
+    dailyLossLimitUsd: 5000,
+    evalMaxDrawdownUsd: 10000,
+    evalDrawdownMethod: 'static',
+    fundedMaxDrawdownUsd: 10000,
+    fundedDrawdownMethod: 'static',
+    minTradingDays: 0,
+    evalConsistencyPct: '',
+    fundedConsistencyPct: '',
+    evaluationFeeUsd: 400,
+    activationFeeUsd: 0,
+    profitSplitPct: 80,
+    refundOnFirstPayout: true,
+    profitBufferUsd: 0,
+    minProfitableDays: 1,
+    minDailyProfitUsd: 0,
+    minWithdrawalUsd: 100,
+    maxPayoutUsd: '',
+    viability: 'Ideal',
+    rulesSummary: '',
+    operationalAlert: '',
+  };
+}
+
+function presetToForm(firm: PropFirmPreset): FirmFormState {
+  return {
+    id: firm.id,
+    isCustom: Boolean(firm.isCustom),
+    name: firm.name,
+    model: firm.model,
+    category: firm.category,
+    accountSize: firm.accountSize,
+    phase1TargetUsd: firm.evaluationRules.phase1TargetUsd.value ?? firm.phase1TargetUsd,
+    phase2TargetUsd: firm.evaluationRules.phase2TargetUsd.value ?? firm.phase2TargetUsd,
+    dailyLossLimitUsd: firm.evaluationRules.dailyLossLimit.amountUsd.value ?? firm.dailyLossLimitUsd,
+    evalMaxDrawdownUsd: firm.evaluationRules.maxDrawdown.amountUsd.value ?? firm.maxDrawdownUsd,
+    evalDrawdownMethod: firm.evaluationRules.maxDrawdown.methodology,
+    fundedMaxDrawdownUsd: firm.fundedRules.maxDrawdown.amountUsd.value ?? firm.maxDrawdownUsd,
+    fundedDrawdownMethod: firm.fundedRules.maxDrawdown.methodology,
+    minTradingDays: firm.evaluationRules.minTradingDays.value ?? firm.minTradingDays,
+    evalConsistencyPct:
+      firm.evaluationRules.consistency.pct.value !== null
+        ? String(firm.evaluationRules.consistency.pct.value)
+        : '',
+    fundedConsistencyPct:
+      firm.fundedRules.consistency.pct.value !== null
+        ? String(firm.fundedRules.consistency.pct.value)
+        : '',
+    evaluationFeeUsd: firm.pricing.evaluationFee.value ?? firm.evaluationFeeUsd,
+    activationFeeUsd: firm.pricing.activationFee.value ?? firm.activationFeeUsd,
+    profitSplitPct: firm.fundedRules.profitSplitPct.value ?? firm.profitSplitPct,
+    refundOnFirstPayout: firm.fundedRules.refundOnFirstPayout.value ?? firm.refundOnFirstPayout,
+    profitBufferUsd: firm.fundedRules.profitBufferUsd.value ?? 0,
+    minProfitableDays: firm.fundedRules.minProfitableDays.value ?? 1,
+    minDailyProfitUsd: firm.fundedRules.minDailyProfitUsd.value ?? 0,
+    minWithdrawalUsd: firm.fundedRules.minWithdrawalUsd.value ?? 100,
+    maxPayoutUsd:
+      firm.fundedRules.maxPayoutUsd.value !== null
+        ? String(firm.fundedRules.maxPayoutUsd.value)
+        : '',
+    viability: firm.viability,
+    rulesSummary: firm.rulesSummary,
+    operationalAlert: firm.operationalAlert ?? '',
+  };
+}
+
+function formToPreset(form: FirmFormState): PropFirmPreset {
+  const today = new Date().toISOString().slice(0, 10);
+  const parseOptionalPositive = (raw: string): number | null => {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    const num = Number(trimmed);
+    return Number.isFinite(num) && num > 0 ? num : null;
+  };
+
+  const evalConsPct = parseOptionalPositive(form.evalConsistencyPct);
+  const fundedConsPct = parseOptionalPositive(form.fundedConsistencyPct);
+  const maxPayout = parseOptionalPositive(form.maxPayoutUsd);
+  const evalConsMethod: ConsistencyMethodology = evalConsPct ? 'best_day_over_net_profit' : 'none';
+  const fundedConsMethod: ConsistencyMethodology = fundedConsPct
+    ? 'best_day_over_net_profit'
+    : 'none';
+  const evalType =
+    form.phase1TargetUsd <= 0 && form.phase2TargetUsd <= 0
+      ? 'Instant'
+      : form.phase2TargetUsd > 0
+      ? '2-Step'
+      : '1-Step';
+
+  return buildFirmPreset({
+    id: form.id,
+    firmId: form.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+    planId: form.id,
+    name: form.name.trim(),
+    model: form.model.trim(),
+    category: form.category,
+    evaluationType: evalType,
+    accountSize: Math.max(1000, form.accountSize),
+    contractVersion: `user-${today}`,
+    effectiveDate: today,
+    lastVerificationDate: today,
+    verificationStatus: 'user_assumed',
+    pricing: {
+      currency: 'USD',
+      evaluationFee: makeUserAssumed(Math.max(0, form.evaluationFeeUsd), 'Definido pelo usuário', today),
+      activationFee: makeUserAssumed(Math.max(0, form.activationFeeUsd), 'Definido pelo usuário', today),
+      resetFee: makeUserAssumed(Math.max(0, form.evaluationFeeUsd), 'Estimado igual à taxa', today),
+      monthlySubscription: makeUserAssumed(0, 'Definido pelo usuário', today),
+    },
+    evaluationRules: {
+      phase1TargetUsd: makeUserAssumed(Math.max(0, form.phase1TargetUsd), undefined, today),
+      phase2TargetUsd: makeUserAssumed(Math.max(0, form.phase2TargetUsd), undefined, today),
+      dailyLossLimit: makeDailyLossRule(
+        form.dailyLossLimitUsd > 0 ? form.dailyLossLimitUsd : null,
+        form.dailyLossLimitUsd > 0 ? 'balance_based' : 'none',
+        'user_assumed',
+        '17:00',
+        'America/New_York',
+        today
+      ),
+      maxDrawdown: makeDrawdownRule(
+        Math.max(100, form.evalMaxDrawdownUsd),
+        form.evalDrawdownMethod,
+        form.evalDrawdownMethod.includes('intraday') ? 'equity' : 'balance',
+        form.evalDrawdownMethod.includes('locked') ? 100 : null,
+        'user_assumed',
+        today
+      ),
+      minTradingDays: makeUserAssumed(Math.max(0, form.minTradingDays), undefined, today),
+      maxTradingDays: makeUserAssumed(null, 'Sem limite máximo definido', today),
+      consistency: makeConsistencyRule(evalConsPct, evalConsMethod, 'user_assumed', today),
+      permittedStrategies: ['Configuração definida pelo usuário'],
+      newsTradingRestricted: null,
+      weekendHoldingRestricted: null,
+    },
+    fundedRules: {
+      dailyLossLimit: makeDailyLossRule(
+        form.dailyLossLimitUsd > 0 ? form.dailyLossLimitUsd : null,
+        form.dailyLossLimitUsd > 0 ? 'balance_based' : 'none',
+        'user_assumed',
+        '17:00',
+        'America/New_York',
+        today
+      ),
+      maxDrawdown: makeDrawdownRule(
+        Math.max(100, form.fundedMaxDrawdownUsd),
+        form.fundedDrawdownMethod,
+        form.fundedDrawdownMethod.includes('intraday') ? 'equity' : 'balance',
+        form.fundedDrawdownMethod.includes('locked') ? 100 : null,
+        'user_assumed',
+        today
+      ),
+      consistency: makeConsistencyRule(fundedConsPct, fundedConsMethod, 'user_assumed', today),
+      profitBufferUsd: makeUserAssumed(Math.max(0, form.profitBufferUsd), undefined, today),
+      minProfitableDays: makeUserAssumed(Math.max(1, form.minProfitableDays), undefined, today),
+      minDailyProfitUsd: makeUserAssumed(Math.max(0, form.minDailyProfitUsd), undefined, today),
+      minWithdrawalUsd: makeUserAssumed(Math.max(0, form.minWithdrawalUsd), undefined, today),
+      maxPayoutUsd: makeUserAssumed(maxPayout, undefined, today),
+      maxWithdrawalPct: makeUserAssumed(100, undefined, today),
+      payoutFrequency: 'Definido pelo usuário',
+      payoutCycleDays: makeUserAssumed(Math.max(1, form.minProfitableDays), undefined, today),
+      profitSplitPct: makeUserAssumed(Math.max(1, Math.min(100, form.profitSplitPct)), undefined, today),
+      refundOnFirstPayout: makeUserAssumed(form.refundOnFirstPayout, undefined, today),
+    },
+    viability: form.viability,
+    rulesSummary: form.rulesSummary.trim(),
+    operationalAlert: form.operationalAlert.trim() || undefined,
+    isCustom: form.isCustom,
+  });
+}
+
+function getVerificationBadge(status: VerificationStatus, isComplete: boolean) {
+  if (!isComplete || status === 'missing') {
+    return {
+      label: 'Dados Ausentes',
+      className: 'bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/30',
+    };
+  }
+  switch (status) {
+    case 'verified':
+      return {
+        label: 'Verificado',
+        className: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
+      };
+    case 'user_assumed':
+      return {
+        label: 'Premissa Usuário',
+        className: 'bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-500/30',
+      };
+    case 'historical':
+      return {
+        label: 'Histórico',
+        className: 'bg-slate-500/10 text-slate-700 dark:text-slate-300 border-slate-500/30',
+      };
+    default:
+      return {
+        label: 'Pendente',
+        className: 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30',
+      };
+  }
+}
 
 export function PropFirmsModule({
   firms,
@@ -72,7 +302,7 @@ export function PropFirmsModule({
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<'Todas' | PropFirmCategory>('Todas');
   const [companyFilter, setCompanyFilter] = useState<string>('Todas');
-  const [editingFirm, setEditingFirm] = useState<PropFirmPreset | null>(null);
+  const [editingFirm, setEditingFirm] = useState<FirmFormState | null>(null);
 
   const uniqueCompanies = Array.from(new Set(firms.map((f) => f.name)));
 
@@ -89,16 +319,13 @@ export function PropFirmsModule({
   });
 
   const handleOpenCreate = () => {
-    setEditingFirm({
-      ...EMPTY_FIRM,
-      id: `custom-${Date.now()}`,
-    });
+    setEditingFirm(createEmptyForm());
   };
 
   const handleSubmitEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingFirm || !editingFirm.name.trim()) return;
-    onSaveFirm(editingFirm);
+    onSaveFirm(formToPreset(editingFirm));
     setEditingFirm(null);
   };
 
@@ -262,6 +489,14 @@ export function PropFirmsModule({
                 {filteredFirms.map((firm) => {
                   const isSelected = firm.id === selectedFirmId;
                   const totalTarget = firm.phase1TargetUsd + firm.phase2TargetUsd;
+                  const validation = validateFirmContract(firm);
+                  const badge = getVerificationBadge(
+                    firm.verificationStatus,
+                    validation.isCompleteForSimulation
+                  );
+                  const ddSwitchesInFunded =
+                    firm.evaluationRules.maxDrawdown.methodology !==
+                    firm.fundedRules.maxDrawdown.methodology;
                   return (
                     <tr
                       key={firm.id}
@@ -272,15 +507,27 @@ export function PropFirmsModule({
                       }
                     >
                       <td className="px-5 py-3.5">
-                        <div className="font-semibold text-slate-900 dark:text-slate-100">
-                          {firm.name}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-semibold text-slate-900 dark:text-slate-100">
+                            {firm.name}
+                          </span>
+                          <span
+                            className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${badge.className}`}
+                          >
+                            {badge.label}
+                          </span>
                         </div>
                         <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                          {firm.model} · {firm.category}
-                          {firm.consistencyRulePct
-                            ? ` · Consistência ${firm.consistencyRulePct}%`
+                          {firm.model} · {firm.category} · {firm.evaluationType}
+                          {firm.evaluationRules.consistency.pct.value
+                            ? ` · Consist. Eval ${firm.evaluationRules.consistency.pct.value}%`
                             : ''}
-                          {firm.minTradingDays > 0 ? ` · ${firm.minTradingDays}d mín.` : ''}
+                          {firm.fundedRules.consistency.pct.value
+                            ? ` · Funded ${firm.fundedRules.consistency.pct.value}%`
+                            : ''}
+                          {firm.fundedRules.profitBufferUsd.value
+                            ? ` · Buffer ${formatUsd(firm.fundedRules.profitBufferUsd.value)}`
+                            : ''}
                         </div>
                         {firm.viability === 'Incompatível' ? (
                           <div className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-red-600 dark:text-red-400">
@@ -305,10 +552,20 @@ export function PropFirmsModule({
                         {formatUsd(firm.maxDrawdownUsd)}
                       </td>
                       <td className="px-4 py-3.5 text-xs text-slate-700 dark:text-slate-300 whitespace-nowrap">
-                        {firm.drawdownType}
+                        <div>{firm.drawdownType}</div>
+                        {ddSwitchesInFunded && (
+                          <div className="text-[10px] text-amber-600 dark:text-amber-400">
+                            Muda na Funded
+                          </div>
+                        )}
                       </td>
-                      <td className="px-4 py-3.5 text-right font-mono text-slate-800 dark:text-slate-200">
-                        {formatUsd(firm.evaluationFeeUsd)}
+                      <td className="px-4 py-3.5 text-right font-mono text-slate-800 dark:text-slate-200 whitespace-nowrap">
+                        <div>{formatUsd(firm.evaluationFeeUsd)}</div>
+                        {firm.activationFeeUsd > 0 && (
+                          <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                            +{formatUsd(firm.activationFeeUsd)} ativ.
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-3.5 text-right font-mono text-slate-800 dark:text-slate-200">
                         {firm.profitSplitPct}%
@@ -342,7 +599,7 @@ export function PropFirmsModule({
                           <button
                             type="button"
                             aria-label={`Editar ${firm.name}`}
-                            onClick={() => setEditingFirm({ ...firm })}
+                            onClick={() => setEditingFirm(presetToForm(firm))}
                             className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100"
                           >
                             <Edit3 className="h-3.5 w-3.5" />
@@ -568,26 +825,6 @@ export function PropFirmsModule({
 
               <div>
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                  Tipo de Drawdown
-                </label>
-                <select
-                  value={editingFirm.drawdownType}
-                  onChange={(e) =>
-                    setEditingFirm({
-                      ...editingFirm,
-                      drawdownType: e.target.value as DrawdownType,
-                    })
-                  }
-                  className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-[#0B0F17] dark:text-slate-100"
-                >
-                  <option value="Estático">Estático</option>
-                  <option value="Trailing EOD">Trailing EOD</option>
-                  <option value="Trailing Intradiário">Trailing Intradiário</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
                   Tamanho da Conta ($)
                 </label>
                 <input
@@ -603,14 +840,29 @@ export function PropFirmsModule({
 
               <div>
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                  Drawdown Máximo ($)
+                  Taxa de Avaliação (T_eval $)
                 </label>
                 <input
                   type="number"
-                  min={100}
-                  value={editingFirm.maxDrawdownUsd}
+                  min={0}
+                  value={editingFirm.evaluationFeeUsd}
                   onChange={(e) =>
-                    setEditingFirm({ ...editingFirm, maxDrawdownUsd: Number(e.target.value) })
+                    setEditingFirm({ ...editingFirm, evaluationFeeUsd: Number(e.target.value) })
+                  }
+                  className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 font-mono text-sm text-slate-900 dark:border-slate-700 dark:bg-[#0B0F17] dark:text-slate-100"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Taxa de Ativação Funded (T_act $)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={editingFirm.activationFeeUsd}
+                  onChange={(e) =>
+                    setEditingFirm({ ...editingFirm, activationFeeUsd: Number(e.target.value) })
                   }
                   className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 font-mono text-sm text-slate-900 dark:border-slate-700 dark:bg-[#0B0F17] dark:text-slate-100"
                 />
@@ -648,15 +900,199 @@ export function PropFirmsModule({
 
               <div>
                 <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                  Taxa de Inscrição ($)
+                  Drawdown Avaliação ($)
+                </label>
+                <input
+                  type="number"
+                  min={100}
+                  value={editingFirm.evalMaxDrawdownUsd}
+                  onChange={(e) =>
+                    setEditingFirm({ ...editingFirm, evalMaxDrawdownUsd: Number(e.target.value) })
+                  }
+                  className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 font-mono text-sm text-slate-900 dark:border-slate-700 dark:bg-[#0B0F17] dark:text-slate-100"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Metodologia DD (Avaliação)
+                </label>
+                <select
+                  value={editingFirm.evalDrawdownMethod}
+                  onChange={(e) =>
+                    setEditingFirm({
+                      ...editingFirm,
+                      evalDrawdownMethod: e.target.value as DrawdownMethodology,
+                    })
+                  }
+                  className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-[#0B0F17] dark:text-slate-100"
+                >
+                  <option value="static">Estático</option>
+                  <option value="trailing_eod">Trailing EOD</option>
+                  <option value="trailing_eod_locked">Trailing EOD (Lock +$100)</option>
+                  <option value="trailing_intraday">Trailing Intradiário</option>
+                  <option value="trailing_intraday_locked">Trailing Intradiário (Lock +$100)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Drawdown Funded ($)
+                </label>
+                <input
+                  type="number"
+                  min={100}
+                  value={editingFirm.fundedMaxDrawdownUsd}
+                  onChange={(e) =>
+                    setEditingFirm({ ...editingFirm, fundedMaxDrawdownUsd: Number(e.target.value) })
+                  }
+                  className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 font-mono text-sm text-slate-900 dark:border-slate-700 dark:bg-[#0B0F17] dark:text-slate-100"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Metodologia DD (Funded)
+                </label>
+                <select
+                  value={editingFirm.fundedDrawdownMethod}
+                  onChange={(e) =>
+                    setEditingFirm({
+                      ...editingFirm,
+                      fundedDrawdownMethod: e.target.value as DrawdownMethodology,
+                    })
+                  }
+                  className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-[#0B0F17] dark:text-slate-100"
+                >
+                  <option value="static">Estático</option>
+                  <option value="trailing_eod">Trailing EOD</option>
+                  <option value="trailing_eod_locked">Trailing EOD (Lock +$100)</option>
+                  <option value="trailing_intraday">Trailing Intradiário</option>
+                  <option value="trailing_intraday_locked">Trailing Intradiário (Lock +$100)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Perda Máxima Diária (0 = Sem limite)
                 </label>
                 <input
                   type="number"
                   min={0}
-                  value={editingFirm.evaluationFeeUsd}
+                  value={editingFirm.dailyLossLimitUsd}
                   onChange={(e) =>
-                    setEditingFirm({ ...editingFirm, evaluationFeeUsd: Number(e.target.value) })
+                    setEditingFirm({ ...editingFirm, dailyLossLimitUsd: Number(e.target.value) })
                   }
+                  className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 font-mono text-sm text-slate-900 dark:border-slate-700 dark:bg-[#0B0F17] dark:text-slate-100"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Buffer de Lucro Funded ($)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={editingFirm.profitBufferUsd}
+                  onChange={(e) =>
+                    setEditingFirm({ ...editingFirm, profitBufferUsd: Number(e.target.value) })
+                  }
+                  className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 font-mono text-sm text-slate-900 dark:border-slate-700 dark:bg-[#0B0F17] dark:text-slate-100"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Consistência Eval (% · vazio = livre)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={editingFirm.evalConsistencyPct}
+                  onChange={(e) =>
+                    setEditingFirm({ ...editingFirm, evalConsistencyPct: e.target.value })
+                  }
+                  placeholder="Livre"
+                  className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 font-mono text-sm text-slate-900 dark:border-slate-700 dark:bg-[#0B0F17] dark:text-slate-100"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Consistência Funded (% · vazio = livre)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={editingFirm.fundedConsistencyPct}
+                  onChange={(e) =>
+                    setEditingFirm({ ...editingFirm, fundedConsistencyPct: e.target.value })
+                  }
+                  placeholder="Livre"
+                  className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 font-mono text-sm text-slate-900 dark:border-slate-700 dark:bg-[#0B0F17] dark:text-slate-100"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Mín. Dias Lucrativos (Payout)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  value={editingFirm.minProfitableDays}
+                  onChange={(e) =>
+                    setEditingFirm({ ...editingFirm, minProfitableDays: Number(e.target.value) })
+                  }
+                  className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 font-mono text-sm text-slate-900 dark:border-slate-700 dark:bg-[#0B0F17] dark:text-slate-100"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Lucro Mín. Diário Qualificado ($)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={editingFirm.minDailyProfitUsd}
+                  onChange={(e) =>
+                    setEditingFirm({ ...editingFirm, minDailyProfitUsd: Number(e.target.value) })
+                  }
+                  className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 font-mono text-sm text-slate-900 dark:border-slate-700 dark:bg-[#0B0F17] dark:text-slate-100"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Saque Mínimo ($)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={editingFirm.minWithdrawalUsd}
+                  onChange={(e) =>
+                    setEditingFirm({ ...editingFirm, minWithdrawalUsd: Number(e.target.value) })
+                  }
+                  className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 font-mono text-sm text-slate-900 dark:border-slate-700 dark:bg-[#0B0F17] dark:text-slate-100"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Teto de Payout ($ · vazio = sem teto)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={editingFirm.maxPayoutUsd}
+                  onChange={(e) =>
+                    setEditingFirm({ ...editingFirm, maxPayoutUsd: e.target.value })
+                  }
+                  placeholder="Sem teto"
                   className="mt-1.5 h-10 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 font-mono text-sm text-slate-900 dark:border-slate-700 dark:bg-[#0B0F17] dark:text-slate-100"
                 />
               </div>
@@ -697,7 +1133,7 @@ export function PropFirmsModule({
                 </select>
               </div>
 
-              <div className="flex items-center gap-3 pt-6">
+              <div className="sm:col-span-2 flex items-center gap-3 pt-1">
                 <input
                   id="edit-refund"
                   type="checkbox"
@@ -711,7 +1147,7 @@ export function PropFirmsModule({
                   htmlFor="edit-refund"
                   className="text-xs font-medium text-slate-700 dark:text-slate-300"
                 >
-                  Reembolsa taxa no 1º payout
+                  Reembolsa taxa de avaliação (+T_eval) no 1º payout
                 </label>
               </div>
 
@@ -735,7 +1171,7 @@ export function PropFirmsModule({
                 </label>
                 <input
                   type="text"
-                  value={editingFirm.operationalAlert ?? ''}
+                  value={editingFirm.operationalAlert}
                   onChange={(e) =>
                     setEditingFirm({ ...editingFirm, operationalAlert: e.target.value })
                   }
@@ -757,7 +1193,7 @@ export function PropFirmsModule({
                 type="submit"
                 className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-500"
               >
-                Salvar Regra
+                Salvar Regra (Premissa Usuário)
               </button>
             </div>
           </form>

@@ -1,4 +1,4 @@
-import { AlertCircle, RotateCcw, Send, X } from 'lucide-react';
+import { AlertCircle, RotateCcw, Send, Square, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { ChatMessage, ConsultIntent } from '../types/quant';
 
@@ -196,10 +196,29 @@ export function AiConsultantDrawer({
   const [showContext, setShowContext] = useState(false);
   const lastNonceRef = useRef<number>(0);
   const endOfMessagesRef = useRef<HTMLDivElement | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isStreaming]);
+
+  useEffect(() => {
+    if (!isOpen && abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
+
+  const handleCancelStream = () => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+  };
 
   const sendConsult = async (promptText: string, intent: ConsultIntent = 'CUSTOM') => {
     const trimmed = promptText.trim();
@@ -230,10 +249,14 @@ export function AiConsultantDrawer({
     setInput('');
     setIsStreaming(true);
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       const response = await fetch('/api/quant/consult', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           messages: conversationHistory,
           workspaceContext,
@@ -287,18 +310,31 @@ export function AiConsultantDrawer({
         }
       }
     } catch (err: unknown) {
-      const errMsg =
-        err instanceof Error
-          ? err.message
-          : 'Não foi possível concluir a consulta quantitativa.';
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMsgId
-            ? { ...m, content: errMsg, error: true }
-            : m
-        )
-      );
+      if (err instanceof Error && err.name === 'AbortError') {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMsgId && !m.content
+              ? { ...m, content: 'Consulta cancelada pelo usuário.' }
+              : m
+          )
+        );
+      } else {
+        const errMsg =
+          err instanceof Error
+            ? err.message
+            : 'Não foi possível concluir a consulta quantitativa.';
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantMsgId
+              ? { ...m, content: errMsg, error: true }
+              : m
+          )
+        );
+      }
     } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
       setIsStreaming(false);
     }
   };
@@ -462,14 +498,25 @@ export function AiConsultantDrawer({
               placeholder="Pergunte sobre hedge, lotes em US30/US100/XAUUSD, bônus ou regras..."
               className="flex-1 resize-none rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-2.5 text-sm text-slate-900 focus:border-emerald-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-[#111827] dark:text-slate-100"
             />
-            <button
-              type="submit"
-              disabled={isStreaming || !input.trim()}
-              className="inline-flex h-11 items-center gap-2 rounded-lg bg-emerald-600 px-4 text-xs font-semibold text-white transition-colors hover:bg-emerald-500 disabled:opacity-40 whitespace-nowrap shrink-0"
-            >
-              <Send className="h-3.5 w-3.5" />
-              {isStreaming ? 'Analisando...' : 'Enviar'}
-            </button>
+            {isStreaming ? (
+              <button
+                type="button"
+                onClick={handleCancelStream}
+                className="inline-flex h-11 items-center gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-4 text-xs font-semibold text-red-600 transition-colors hover:bg-red-500/20 dark:text-red-400 whitespace-nowrap shrink-0"
+              >
+                <Square className="h-3.5 w-3.5 fill-current" />
+                Cancelar
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!input.trim()}
+                className="inline-flex h-11 items-center gap-2 rounded-lg bg-emerald-600 px-4 text-xs font-semibold text-white transition-colors hover:bg-emerald-500 disabled:opacity-40 whitespace-nowrap shrink-0"
+              >
+                <Send className="h-3.5 w-3.5" />
+                Enviar
+              </button>
+            )}
           </div>
         </form>
       </div>

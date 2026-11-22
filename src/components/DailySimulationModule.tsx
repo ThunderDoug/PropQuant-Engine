@@ -24,6 +24,7 @@ import {
   RandomSizingMode,
 } from '../types/quant';
 import {
+  calculateStepPreview,
   formatFactor,
   formatLot,
   formatUsd,
@@ -42,6 +43,8 @@ interface DailySimulationModuleProps {
   onToggleHedgeDuringFunded: () => void;
   protectDoubleLoss: boolean;
   onToggleProtectDoubleLoss: () => void;
+  requireHedgeCoverageForPayout: boolean;
+  onToggleRequireHedgeCoverageForPayout: () => void;
   funded101Enabled: boolean;
   onToggleFunded101: () => void;
   funded101Inputs: FundedMethod101Inputs;
@@ -66,12 +69,13 @@ export function DailySimulationModule({
   summary,
   arbitrageInputs,
   hedgeFactor,
-  drawdownUsd,
   desiredRiskUsd,
   hedgeDuringFunded,
   onToggleHedgeDuringFunded,
   protectDoubleLoss,
   onToggleProtectDoubleLoss,
+  requireHedgeCoverageForPayout,
+  onToggleRequireHedgeCoverageForPayout,
   funded101Enabled,
   onToggleFunded101,
   funded101Inputs,
@@ -107,34 +111,21 @@ export function DailySimulationModule({
     INSTRUMENT_SPECS.find((s) => s.id === instrumentId) ?? INSTRUMENT_SPECS[0];
 
   const safeDaysDivisor = Math.max(1, minDaysDivisor);
-  const evalTargetPreview =
-    summary.currentPhase === 'Funded'
-      ? Math.max(100, arbitrageInputs.payoutGrossProfitUsd)
-      : summary.currentPhase === 'Fase 2' && firm.phase2TargetUsd > 0
-      ? firm.phase2TargetUsd
-      : firm.phase1TargetUsd > 0
-      ? firm.phase1TargetUsd
-      : Math.max(100, arbitrageInputs.totalTargetUsd);
-
-  const isCurrentlyInFunded101 = summary.currentPhase === 'Funded' && funded101Enabled;
-
-  const previewTp = isCurrentlyInFunded101
-    ? Math.round(funded101Inputs.shortTargetUsd)
-    : sizingMode === 'dd_max_rr'
-    ? Math.round(drawdownUsd * rewardToRisk)
-    : sizingMode === 'fixed_risk'
-    ? Math.round(desiredRiskUsd * rewardToRisk)
-    : Math.round(evalTargetPreview / safeDaysDivisor);
-
-  const previewSl = isCurrentlyInFunded101
-    ? Math.round(funded101Inputs.remainingDrawdownUsd)
-    : sizingMode === 'meta_dias_rr'
-    ? Math.round(previewTp / Math.max(0.1, rewardToRisk))
-    : sizingMode === 'fixed_risk'
-    ? Math.round(desiredRiskUsd)
-    : Math.round(drawdownUsd);
-
-  const previewEffectiveRr = previewSl > 0 ? previewTp / previewSl : 0;
+  const stepPreview = calculateStepPreview(
+    summary,
+    firm,
+    arbitrageInputs,
+    sizingMode,
+    rewardToRisk,
+    safeDaysDivisor,
+    desiredRiskUsd,
+    funded101Enabled,
+    funded101Inputs
+  );
+  const previewTp = stepPreview.tpUsd;
+  const previewSl = stepPreview.slUsd;
+  const previewEffectiveRr = stepPreview.effectiveRr;
+  const isCurrentlyInFunded101 = stepPreview.isFunded101Active;
 
   const handleRandomRun = () => {
     setRandomRunCount((c) => c + 1);
@@ -151,6 +142,7 @@ export function DailySimulationModule({
       fundedActiveDaysTarget: funded101Inputs.activeDaysTarget,
       fundedStopMaxUsd: funded101Inputs.remainingDrawdownUsd,
       protectDoubleLoss,
+      requireHedgeCoverageForPayout,
     });
   };
 
@@ -274,6 +266,20 @@ export function DailySimulationModule({
         </div>
       </div>
 
+      {/* Contractual Integrity Fail-Closed Alert */}
+      {!summary.contractValidation.isCompleteForSimulation && (
+        <div
+          role="alert"
+          className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-5 py-3 text-xs text-amber-800 dark:text-amber-200 flex items-start gap-2.5"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <span className="font-semibold">Contrato incompleto (fail-closed):</span>{' '}
+            {summary.contractValidation.missingCriticalFields.join(' · ')}. Preencha os parâmetros manualmente ou ajuste a mesa antes de operar.
+          </div>
+        </div>
+      )}
+
       {/* Status Alert Banners */}
       {summary.status === 'Reprovado (Stop)' && (
         <div
@@ -286,7 +292,7 @@ export function DailySimulationModule({
               Conta Reprovada no Dia {summary.totalDays} ({summary.currentPhase})
             </div>
             <p className="mt-0.5 text-xs">
-              {summary.failureReason} No hedge da corretora, o ganho acumulado foi de{' '}
+              {summary.failureReason} Taxas pagas: <span className="font-mono">{formatUsd(summary.feesPaidTotalUsd)}</span>. No hedge da corretora, o ganho acumulado foi de{' '}
               <span className="font-mono font-semibold">
                 {formatUsd(summary.brokerCumulativePnlUsd, true)}
               </span>
@@ -300,21 +306,97 @@ export function DailySimulationModule({
         </div>
       )}
 
-      {summary.status === 'Aprovado para Saque' && (
-        <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-5 py-3.5 text-sm text-emerald-800 dark:text-emerald-200 flex items-start gap-3">
-          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400" />
-          <div>
+      {summary.status === 'Aprovado para Saque' && summary.payoutEligibility && (
+        <div
+          className={`rounded-xl border px-5 py-3.5 text-sm flex items-start gap-3 ${
+            summary.payoutEligibility.coversHedgeAndFees
+              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200'
+              : 'border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-200'
+          }`}
+        >
+          {summary.payoutEligibility.coversHedgeAndFees ? (
+            <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+          ) : (
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+          )}
+          <div className="space-y-1">
             <div className="font-semibold">
-              Jornada Concluída — Elegível ao 1º Saque no Dia {summary.totalDays}
+              {summary.payoutEligibility.coversHedgeAndFees
+                ? `Jornada Concluída — Saque Lucrativo no Dia ${summary.totalDays} (${summary.payoutsCount} ${summary.payoutsCount === 1 ? 'saque' : 'saques'} · Consolidado Positivo)`
+                : `Elegível ao 1º Saque na Mesa (Dia ${summary.totalDays}) — Consolidado Negativo após Hedge`}
             </div>
-            <p className="mt-0.5 text-xs">
-              Avaliação e dias ativos na Funded ({funded101Enabled ? 'via Método 10:1' : 'via Meta Padrão'}) cumpridos. Resultado líquido consolidado após split ({firm.profitSplitPct}%) e hedge acumulado:{' '}
+            <p className="text-xs">
+              Total sacado líquido ({summary.payoutsCount}x · {summary.payoutEligibility.profitSplitPct}% split):{' '}
+              <span className="font-mono font-semibold">
+                {formatUsd(summary.payoutsReceivedTotalUsd, true)}
+              </span>{' '}
+              (saldo retido: {formatUsd(summary.payoutEligibility.retainedBalanceUsd)}). Resultado
+              líquido consolidado após taxas ({formatUsd(summary.feesPaidTotalUsd)}) e hedge (
+              <span className="font-mono">{formatUsd(summary.brokerCumulativePnlUsd, true)}</span>):{' '}
               <span className="font-mono font-semibold">
                 {formatUsd(summary.finalNetOutcomeUsd, true)}
               </span>
               .
             </p>
+            {!summary.payoutEligibility.coversHedgeAndFees && (
+              <p className="text-xs">
+                Para empatar hedge + taxas ($0 líquido), seria necessário um saque líquido de{' '}
+                <span className="font-mono font-semibold">
+                  {formatUsd(summary.payoutEligibility.requiredNetPayoutToBreakEvenUsd)}
+                </span>{' '}
+                (faltam{' '}
+                <span className="font-mono font-semibold">
+                  +{formatUsd(summary.payoutEligibility.additionalGrossProfitForBreakEvenUsd)}
+                </span>{' '}
+                de lucro bruto na Funded sem novo desconto de hedge).
+                {summary.payoutEligibility.isSinglePayoutCappedBelowBreakEven &&
+                  ' Atenção: o teto de saque por ciclo desta mesa limita o 1º payout abaixo do break-even consolidado.'}
+                {summary.payoutEligibility.hedgeBlocksBreakEven &&
+                  ' Ative "Só Sacar após Cobrir Hedge + Taxas" para continuar executando ciclos de saque até ficar positivo.'}
+              </p>
+            )}
           </div>
+        </div>
+      )}
+
+      {summary.payoutEligibility && !summary.payoutEligibility.isEligible && summary.status === 'Em Andamento' && (
+        <div className="rounded-xl border border-sky-500/30 bg-sky-500/10 px-5 py-3.5 text-xs text-sky-900 dark:text-sky-200 space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="font-semibold">
+              {summary.payoutEligibility.isContractuallyEligible
+                ? 'Elegível na Mesa · Aguardando Consolidado Positivo'
+                : `Ciclo de Saque #${summary.payoutsCount + 1} (${summary.payoutEligibility.qualifyingDaysCount}/${summary.payoutEligibility.requiredProfitableDays} dias qualificados)`}
+            </div>
+            <div className="flex flex-wrap items-center gap-3 font-mono text-[11px]">
+              {summary.payoutsCount > 0 && (
+                <span>
+                  Já sacado ({summary.payoutsCount}x):{' '}
+                  <strong>{formatUsd(summary.payoutsReceivedTotalUsd, true)}</strong>
+                </span>
+              )}
+              <span>
+                Saque próx. ciclo:{' '}
+                <strong>{formatUsd(summary.payoutEligibility.netTraderPayoutUsd)}</strong>
+              </span>
+              <span>
+                Falta p/ positivo:{' '}
+                <strong>{formatUsd(summary.payoutEligibility.requiredNetPayoutToBreakEvenUsd)}</strong>
+              </span>
+            </div>
+          </div>
+          <ul className="list-disc pl-4 space-y-0.5">
+            {summary.payoutEligibility.blockedReasons.map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+          {summary.payoutEligibility.hedgeBlocksBreakEven && !requireHedgeCoverageForPayout && (
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-900 dark:text-amber-200">
+              <strong>Atenção (Hedge ativo na Funded):</strong> sem executar saques intermediários
+              por ciclo, o fator F crescente drena o hedge mais rápido que o split do 1º saque.
+              Mantenha <strong>Só Sacar após Cobrir Hedge + Taxas</strong> ligado (multi-ciclos) ou
+              desligue o hedge na Funded.
+            </div>
+          )}
         </div>
       )}
 
@@ -325,8 +407,8 @@ export function DailySimulationModule({
         >
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
-            Regra de consistência ativa ({summary.consistencyLimitPct}%): seu maior dia positivo nesta fase representa{' '}
-            <strong className="font-mono">{summary.consistencyRatioPct?.toFixed(1)}%</strong> do lucro positivo acumulado. Adicione mais dias positivos equilibrados para liberar o avanço de fase.
+            Regra de consistência ativa ({summary.consistencyLimitPct}% · {summary.consistencyMethodology}): seu maior dia positivo nesta fase representa{' '}
+            <strong className="font-mono">{summary.consistencyRatioPct?.toFixed(1)}%</strong>. Adicione mais dias positivos equilibrados para liberar o avanço de fase.
           </span>
         </div>
       )}
@@ -769,6 +851,35 @@ export function DailySimulationModule({
                     />
                   </button>
                 </div>
+
+                <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-200 dark:border-slate-800">
+                  <div>
+                    <span className="block text-[11px] font-medium text-slate-700 dark:text-slate-200">
+                      Continuar Ciclos até Ficar Positivo
+                    </span>
+                    <span className="block text-[10px] text-slate-500 dark:text-slate-400">
+                      Executa saques por ciclo e segue na Funded até consolidado &gt; $0
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={requireHedgeCoverageForPayout}
+                    aria-label="Exigir que o saque líquido cubra hedge acumulado e taxas antes de encerrar"
+                    onClick={onToggleRequireHedgeCoverageForPayout}
+                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                      requireHedgeCoverageForPayout
+                        ? 'bg-emerald-600'
+                        : 'bg-slate-300 dark:bg-slate-700'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                        requireHedgeCoverageForPayout ? 'translate-x-4.5' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
               </div>
 
               {/* Preview TP/SL */}
@@ -1119,6 +1230,19 @@ export function DailySimulationModule({
                           {step.violationReason ? (
                             <span className="font-medium text-red-600 dark:text-red-400">
                               Stop: {step.violationReason}
+                            </span>
+                          ) : step.payoutExecutedUsd !== undefined ? (
+                            <span
+                              className={`font-semibold ${
+                                step.lifecycleState === 'payout_eligible'
+                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                  : 'text-sky-600 dark:text-sky-400'
+                              }`}
+                            >
+                              Saque #{step.payoutNumber} ({formatUsd(step.payoutExecutedUsd, true)})
+                              {step.lifecycleState === 'payout_approved'
+                                ? ` · Segue Ciclo #${(step.payoutNumber ?? 1) + 1}`
+                                : ' · Consolidado Fechado'}
                             </span>
                           ) : step.phaseAdvancedTo ? (
                             <span className="font-semibold text-emerald-600 dark:text-emerald-400">
