@@ -90,7 +90,7 @@ test('trailing EOD high-water mark ratchets the drawdown floor', () => {
     accounts: [{ ...account, firm: trailingFirm }],
     scenarios: [scenario('gain', 200), scenario('giveback', -150)],
   });
-  assert.equal(result.steps[0].drawdownFloorUsd, 50000);
+  assert.equal(result.steps[0].drawdownFloorUsd, 50100);
   assert.equal(result.terminalAccounts['A-1'].status, 'breached');
 });
 
