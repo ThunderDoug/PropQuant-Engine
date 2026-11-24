@@ -15,7 +15,7 @@ Advance from Phase 2's pure one-step payoff evaluator to a deterministic chronol
 - Static, trailing EOD, trailing intraday, and locked trailing drawdown.
 - Balance/equity basis selection.
 - Daily loss limits with caller-supplied session IDs and session-start baselines.
-- Account breach as an absorbing state.
+- Breached, restricted, and terminated account states as absorbing states.
 - Funded payout-cycle elapsed-day tracking.
 - Explicit realized withdrawals, checked against the contractual payout opportunity and payout-cycle gate.
 - Deterministic chronological replay and per-step audit records.
@@ -29,11 +29,12 @@ Advance from Phase 2's pure one-step payoff evaluator to a deterministic chronol
 - Trailing intraday tests the supplied adverse equity excursion against the floor derived from the larger of the stored high-water mark and supplied intraday peak.
 - Locked trailing methods lock the floor at initial account balance once the high-water mark reaches initial balance + `lockOffsetUsd`.
 - A new `sessionId` resets daily-loss baselines. The caller must derive IDs using the contract's `resetTime` and IANA `timezone`; this engine does not parse local session clocks.
-- A realized payout is an explicit already-received amount. It reduces account balance/equity and resets the payout-cycle elapsed-day counter. Contractual payout opportunity is never automatically treated as cash.
+- A realized payout is an explicit already-received amount. It reduces account balance/equity, resets the payout-cycle elapsed-day counter, and is checked again against the post-withdrawal drawdown floor. Contractual payout opportunity is never automatically treated as cash.
+- The scenario's `outcome.grossPnlUsd` must match `path.dailyPnlUsd`; the latter is the authoritative net daily result.
 
 ## Fail-closed behavior and limitations
 
-- Missing/invalid drawdown and daily-loss rules block simulation.
+- Missing/invalid drawdown, daily-loss, or funded payout-cycle rules block simulation.
 - Unknown daily-loss methodology is rejected.
 - Scenario account-status failures are absorbing.
 - Contract terms are read from the supplied versioned `PropFirmPreset`; contract changes require a separate replay segment/configuration.
