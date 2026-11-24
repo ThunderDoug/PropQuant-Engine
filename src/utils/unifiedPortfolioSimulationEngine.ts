@@ -192,6 +192,7 @@ export function runUnifiedPortfolioSimulation(
     const cumulativePnl: Record<string, number> = Object.fromEntries(config.accounts.map((a) => [a.accountId, a.initialCumulativePnlUsd ?? a.accountState.cumulativeProfitUsd]));
     const states: Record<string, ContractualAccountState> = Object.fromEntries(config.accounts.map((a) => [a.accountId, {
       ...a.accountState,
+      cumulativeProfitUsd: a.initialCumulativePnlUsd ?? a.accountState.cumulativeProfitUsd,
       priorDailyPnlUsd: [...(a.accountState.priorDailyPnlUsd ?? [])],
     }]));
     const status: Record<string, JointAccountStatus> = Object.fromEntries(ids.map((id) => [id, 'active']));
@@ -214,7 +215,6 @@ export function runUnifiedPortfolioSimulation(
       scenarioIds.push(selected.scenarioId);
       periodsSimulated += 1;
 
-      let periodPnl = 0;
       let periodPotentialPayout = 0;
       for (const account of config.accounts) {
         const id = account.accountId;
@@ -231,7 +231,6 @@ export function runUnifiedPortfolioSimulation(
           scenarioOutcome: scaledOutcome,
         });
         cumulativePnl[id] += scaledPnl;
-        periodPnl += scaledPnl;
         totalGrossPnl += scaledPnl;
         states[id] = {
           ...states[id],
@@ -263,7 +262,6 @@ export function runUnifiedPortfolioSimulation(
         failureCounts.minimumActiveAccounts += 1;
       }
       if (portfolioFailed) break;
-      void periodPnl;
     }
 
     if (!portfolioFailed) portfolioSurvivals += 1;
