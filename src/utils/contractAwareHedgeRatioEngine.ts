@@ -91,8 +91,8 @@ interface EvaluatedCandidate {
 const EPSILON = 1e-9;
 const OBJECTIVE_PRIORITY = [
   '1. Maximize expected contractual trader payout (potential payout, not received cash).',
-  '2. Minimize probability of negative combined gross P&L.',
-  '3. Maximize expected combined gross P&L.',
+  '2. Maximize expected combined gross P&L.',
+  '3. Minimize probability of negative combined gross P&L.',
   '4. Minimize worst-case combined gross loss.',
   '5. Deterministic lexical tie-break on ratio vector.',
 ];
@@ -268,8 +268,8 @@ function isBetter(
   const right = incumbent.metrics;
   const objectives: Array<[number, number, 'max' | 'min']> = [
     [left.expectedContractualTraderPayoutUsd, right.expectedContractualTraderPayoutUsd, 'max'],
-    [left.probabilityOfCombinedLoss, right.probabilityOfCombinedLoss, 'min'],
     [left.expectedCombinedGrossPnlUsd, right.expectedCombinedGrossPnlUsd, 'max'],
+    [left.probabilityOfCombinedLoss, right.probabilityOfCombinedLoss, 'min'],
     [left.worstCaseCombinedLossUsd, right.worstCaseCombinedLossUsd, 'min'],
   ];
   for (const [a, b, direction] of objectives) {
