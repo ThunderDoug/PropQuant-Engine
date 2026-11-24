@@ -328,7 +328,7 @@ export function runContractualLifecycleSimulation(
         0,
         dailyRules.dailyLoss.methodology === 'equity_based'
           ? Math.max(0, state.sessionStartEquityUsd - (openingEquity + adversePnl))
-          : Math.max(0, state.sessionStartBalanceUsd - (openingBalance + Math.min(0, dailyPnl)))
+          : Math.max(0, state.sessionStartBalanceUsd - (openingBalance + Math.min(0, adversePnl)))
       );
       const dailyLossRemaining = dailyRules.dailyLossUsd === null
         ? null
@@ -337,9 +337,11 @@ export function runContractualLifecycleSimulation(
       const candidateBalance = openingBalance + dailyPnl;
       const floor = drawdownFloor(account, state, peakPnl);
       const adverseEquity = openingEquity + adversePnl;
+      const adverseBalance = openingBalance + adversePnl;
+      const intradayDrawdown = dailyRules.drawdown.methodology.includes('intraday');
       const drawdownTestValue = dailyRules.drawdown.basis === 'equity'
-        ? (dailyRules.drawdown.methodology.includes('intraday') ? adverseEquity : candidateEquity)
-        : candidateBalance;
+        ? (intradayDrawdown ? adverseEquity : candidateEquity)
+        : (intradayDrawdown ? adverseBalance : candidateBalance);
       let violation: string | null = null;
       if (dailyLossRemaining !== null && dailyLossRemaining <= EPSILON) violation = 'daily_loss_limit_breached';
       if (drawdownTestValue <= floor + EPSILON) violation = violation
@@ -371,9 +373,11 @@ export function runContractualLifecycleSimulation(
         state.status = outcome.accountStatus === 'restricted' || outcome.accountStatus === 'terminated' ? outcome.accountStatus : 'breached';
         transitions.push({ scenarioId: scenario.scenarioId, accountId: id, from: state.phase, to: state.status, reason: violation });
       } else {
-        const highWaterMarkBasis = dailyRules.drawdown.basis === 'equity'
-          ? state.equityUsd
-          : state.balanceUsd;
+        const highWaterMarkBasis = dailyRules.drawdown.methodology.includes('intraday')
+          ? (dailyRules.drawdown.basis === 'equity'
+            ? openingEquity + peakPnl
+            : openingBalance + peakPnl)
+          : (dailyRules.drawdown.basis === 'equity' ? state.equityUsd : state.balanceUsd);
         state.highWaterMarkUsd = Math.max(state.highWaterMarkUsd, highWaterMarkBasis);
         state.payoutCycleElapsedDays += 1;
       }
