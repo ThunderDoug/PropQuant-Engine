@@ -58,6 +58,9 @@ test('evaluation phase advances when target, minimum days and consistency are me
 test('static drawdown breach is absorbing and prevents phase progression', () => {
   const result = runContractualLifecycleSimulation({ accounts: [account], scenarios: [scenario('loss', -1000)] });
   assert.equal(result.terminalAccounts['A-1'].status, 'breached');
+  assert.equal(result.terminalAccounts['A-1'].balanceUsd, 49000);
+  assert.equal(result.terminalAccounts['A-1'].equityUsd, 49000);
+  assert.equal(result.terminalAccounts['A-1'].cumulativeProfitUsd, -1000);
   assert.match(result.steps[0].violationReason ?? '', /max_drawdown/);
   assert.equal(result.transitions[0].to, 'breached');
 });
