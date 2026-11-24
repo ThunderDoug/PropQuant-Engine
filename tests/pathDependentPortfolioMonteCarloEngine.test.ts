@@ -150,6 +150,76 @@ test('minimum active-account stop is triggered by a path-dependent drawdown brea
   assert.equal(result.expectedGrossTradingPnlUsd, -1000);
 });
 
+test('contractual payout opportunity is not cash; only a validated withdrawal increases cash', () => {
+  const fundedFirm = {
+    ...firm,
+    fundedRules: {
+      ...firm.fundedRules,
+      dailyLossLimit: { ...firm.fundedRules.dailyLossLimit, methodology: 'none' as const },
+      payoutCycleDays: { ...firm.fundedRules.payoutCycleDays, value: 1, status: 'verified' as const },
+      minProfitableDays: { ...firm.fundedRules.minProfitableDays, value: 1, status: 'verified' as const },
+      minDailyProfitUsd: { ...firm.fundedRules.minDailyProfitUsd, value: 1, status: 'verified' as const },
+      profitBufferUsd: { ...firm.fundedRules.profitBufferUsd, value: 0, status: 'verified' as const },
+      minWithdrawalUsd: { ...firm.fundedRules.minWithdrawalUsd, value: 1, status: 'verified' as const },
+      maxPayoutUsd: { ...firm.fundedRules.maxPayoutUsd, value: 1000, status: 'verified' as const },
+      maxWithdrawalPct: { ...firm.fundedRules.maxWithdrawalPct, value: 100, status: 'verified' as const },
+      consistency: { ...firm.fundedRules.consistency, methodology: 'none' as const },
+    },
+  };
+  const fundedAccount: PathDependentPortfolioAccount = {
+    ...account,
+    firm: fundedFirm,
+    initialPhase: 'funded',
+    initialBalanceUsd: 50100,
+    initialEquityUsd: 50100,
+    initialCumulativeProfitUsd: 100,
+  };
+  const approved = jointScenario('approved-payout-day', 100, {
+    outcomes: {
+      'A-1': {
+        grossPnlUsd: 100,
+        outcomeType: 'win',
+        accountStatus: 'active',
+        payoutStatus: 'approved',
+      },
+    },
+  });
+
+  const opportunityOnly = runPathDependentPortfolioMonteCarlo(config(approved, {
+    accounts: [fundedAccount],
+    iterations: 1,
+    horizonPeriods: 1,
+    availableCashUsd: 10,
+  }));
+  assert.ok(opportunityOnly.expectedContractualPayoutOpportunityUsd > 0);
+  assert.equal(opportunityOnly.expectedRealizedPayoutUsd, 0);
+  assert.equal(opportunityOnly.endingCashBalanceMeanUsd, 10);
+
+  const realized = jointScenario('realized-payout-day', 100, {
+    outcomes: {
+      'A-1': {
+        grossPnlUsd: 100,
+        outcomeType: 'win',
+        accountStatus: 'active',
+        payoutStatus: 'approved',
+      },
+    },
+    accountPaths: {
+      'A-1': { sessionId: 'session-1', realizedPayoutUsd: 50 },
+    },
+  });
+  const withWithdrawal = runPathDependentPortfolioMonteCarlo(config(realized, {
+    accounts: [fundedAccount],
+    iterations: 1,
+    horizonPeriods: 1,
+    availableCashUsd: 10,
+    samplePathCount: 1,
+  }));
+  assert.equal(withWithdrawal.expectedRealizedPayoutUsd, 50);
+  assert.equal(withWithdrawal.endingCashBalanceMeanUsd, 60);
+  assert.equal(withWithdrawal.samplePaths[0].terminalAccountBalanceUsd['A-1'], 50150);
+});
+
 test('period-specific session IDs reset the contractual daily-loss clock', () => {
   const dailyLossFirm = {
     ...firm,
