@@ -194,9 +194,12 @@ function validate(config: ContractualLifecycleConfig): void {
   if (!Array.isArray(config.accounts) || config.accounts.length === 0) errors.push('At least one account is required.');
   if (!Array.isArray(config.scenarios) || config.scenarios.length === 0) errors.push('At least one chronological scenario is required.');
   const ids = new Set<string>();
+  const scenarioIds = new Set<string>();
   for (const account of config.accounts ?? []) {
     if (!account.accountId?.trim() || ids.has(account.accountId)) errors.push(`Invalid or duplicate accountId "${account.accountId}".`);
     ids.add(account.accountId);
+    if (!Number.isInteger(account.initialPayoutCycleElapsedDays ?? 0) || (account.initialPayoutCycleElapsedDays ?? 0) < 0) errors.push('Invalid initial payout-cycle day count for ' + account.accountId + '.');
+    if (!Number.isInteger(account.initialPriorTradingDays ?? 0) || (account.initialPriorTradingDays ?? 0) < 0) errors.push('Invalid initial trading-day count for ' + account.accountId + '.');
     if (!account.firm) errors.push(`Missing firm contract for "${account.accountId}".`);
     if (!finite(account.firm?.accountSize) || (account.firm?.accountSize ?? 0) <= 0) errors.push(`Invalid account size for "${account.accountId}".`);
     for (const value of [account.initialBalanceUsd, account.initialEquityUsd, account.initialCumulativeProfitUsd, account.initialHighWaterMarkUsd, account.initialSessionStartBalanceUsd, account.initialSessionStartEquityUsd]) {
@@ -204,6 +207,8 @@ function validate(config: ContractualLifecycleConfig): void {
     }
   }
   for (const scenario of config.scenarios ?? []) {
+    if (!scenario.scenarioId?.trim() || scenarioIds.has(scenario.scenarioId)) errors.push('Invalid or duplicate scenarioId ' + scenario.scenarioId + '.');
+    scenarioIds.add(scenario.scenarioId);
     for (const id of ids) {
       const entry = scenario.accounts?.[id];
       if (!entry) { errors.push(`Scenario "${scenario.scenarioId}" missing account "${id}".`); continue; }
@@ -342,6 +347,13 @@ export function runContractualLifecycleSimulation(
           state.realizedPayoutTotalUsd += requested;
           totalRealizedPayoutUsd += requested;
           state.payoutCycleElapsedDays = 0;
+          const postPayoutFloor = drawdownFloor(account, state, 0);
+          const postPayoutValue = dailyRules.drawdown.basis === 'equity' ? state.equityUsd : state.balanceUsd;
+          if (postPayoutValue <= postPayoutFloor + EPSILON) {
+            state.status = 'breached';
+            violation = 'post_payout_drawdown_breached';
+            transitions.push({ scenarioId: scenario.scenarioId, accountId: id, from: state.phase, to: 'breached', reason: violation });
+          }
         }
       } else if ((path.realizedPayoutUsd ?? 0) > EPSILON) {
         throw new Error(`Realized payout supplied for non-funded or failed account "${id}".`);
