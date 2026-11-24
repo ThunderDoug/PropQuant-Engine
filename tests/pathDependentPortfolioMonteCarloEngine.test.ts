@@ -268,4 +268,21 @@ test('rejects incomplete session calendars and invalid cash flows', () => {
     () => runPathDependentPortfolioMonteCarlo(config(invalidCash)),
     /invalid cashOutflowUsd/,
   );
+
+  const dailyLossFirm = {
+    ...firm,
+    evaluationRules: {
+      ...firm.evaluationRules,
+      dailyLossLimit: { ...firm.evaluationRules.dailyLossLimit, methodology: 'balance_based' as const },
+    },
+  };
+  const noCalendarAccount: PathDependentPortfolioAccount = { ...account, firm: dailyLossFirm };
+  assert.throws(
+    () => runPathDependentPortfolioMonteCarlo(config(jointScenario('daily-loss', -10), {
+      accounts: [noCalendarAccount],
+      iterations: 1,
+      horizonPeriods: 2,
+    })),
+    /requires sessionIdByPeriod/,
+  );
 });
