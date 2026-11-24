@@ -24,7 +24,7 @@ Each account requires the Phase 10 lifecycle inputs, its firm contract version, 
 - accountPaths, including a session ID and optional intraday peak/adverse excursions and an explicit realized payout.
 - Optional per-account cash-flow entries.
 
-Use sessionIdByPeriod when a scenario template may recur across trading days. It must contain a non-empty session ID for every period in the requested horizon. The caller remains responsible for generating these identifiers from each contract's reset time and IANA timezone. The engine does not infer calendar dates or timezone boundaries.
+Use sessionIdByPeriod when a scenario template may recur across trading days. It must contain a non-empty session ID for every period in the requested horizon. It is mandatory for multi-period paths when either the evaluation or funded contract enables a daily-loss rule, preventing a static session ID from accidentally suppressing daily resets. The caller remains responsible for generating these identifiers from each contract's reset time and IANA timezone. The engine does not infer calendar dates or timezone boundaries.
 
 Intraday excursions are expressed in the source scenario's P&L units and multiplied by the same hedge ratio as daily P&L. realizedPayoutUsd is an explicit withdrawal amount and is not scaled. It is accepted only if Phase 10 validates the payout cycle and contractual payout opportunity.
 
