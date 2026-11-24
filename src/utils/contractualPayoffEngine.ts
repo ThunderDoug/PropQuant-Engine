@@ -6,10 +6,7 @@
  * cash; realized cash belongs to the later cash-ledger phase.
  */
 
-import type {
-  AccountLifecycleState,
-  PropFirmPreset,
-} from '../types/quant.ts';
+import type { PropFirmPreset } from '../types/quant.ts';
 import {
   evaluatePayoutEligibility,
   roundCurrency,
