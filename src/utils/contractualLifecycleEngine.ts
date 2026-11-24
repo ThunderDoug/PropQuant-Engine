@@ -56,10 +56,28 @@ export interface LifecycleScenario {
   }>;
 }
 
+export interface LifecyclePortfolioStopRules {
+  /** Positive loss threshold applied to cumulative trading P&L across accounts. */
+  maxPortfolioLossUsd?: number;
+  /** Stop after a day when fewer than this many accounts remain active. */
+  minimumActiveAccounts?: number;
+}
+
 export interface ContractualLifecycleConfig {
   accounts: LifecycleAccountConfig[];
   /** Ordered, chronological path. These are path steps, not independent samples. */
   scenarios: LifecycleScenario[];
+  /** Optional portfolio-level stop conditions evaluated after each complete day. */
+  portfolioStopRules?: LifecyclePortfolioStopRules;
+}
+
+export interface LifecycleScenarioSnapshot {
+  scenarioId: string;
+  cumulativePortfolioPnlUsd: number;
+  activeAccountCount: number;
+  accountStatuses: Record<string, LifecycleStatus>;
+  realizedPayoutUsd: number;
+  contractualPayoutOpportunityUsd: number;
 }
 
 export interface LifecycleTransition {
@@ -93,6 +111,10 @@ export interface LifecycleStepResult {
 export interface ContractualLifecycleResult {
   steps: LifecycleStepResult[];
   transitions: LifecycleTransition[];
+  scenarioSnapshots: LifecycleScenarioSnapshot[];
+  processedScenarioCount: number;
+  stoppedEarly: boolean;
+  portfolioStopReason: 'portfolio_loss_limit' | 'minimum_active_accounts' | null;
   terminalAccounts: Record<string, {
     phase: ContractualPayoffPhase;
     status: LifecycleStatus;
@@ -177,8 +199,9 @@ function drawdownFloor(
   if (drawdown.methodology === 'static') return initial - drawdownUsd;
 
   const intraday = drawdown.methodology.includes('intraday');
+  const drawdownBasis = drawdown.basis === 'equity' ? runtime.equityUsd : runtime.balanceUsd;
   const peak = intraday
-    ? Math.max(runtime.highWaterMarkUsd, runtime.balanceUsd + intradayPeakPnlUsd)
+    ? Math.max(runtime.highWaterMarkUsd, drawdownBasis + intradayPeakPnlUsd)
     : runtime.highWaterMarkUsd;
   let floor = peak - drawdownUsd;
   if (drawdown.methodology.endsWith('_locked')) {
@@ -221,6 +244,17 @@ function validate(config: ContractualLifecycleConfig): void {
     }
     for (const id of Object.keys(scenario.accounts ?? {})) if (!ids.has(id)) errors.push(`Scenario "${scenario.scenarioId}" has unknown account "${id}".`);
   }
+  const stopRules = config.portfolioStopRules;
+  if (stopRules?.maxPortfolioLossUsd !== undefined &&
+      (!finite(stopRules.maxPortfolioLossUsd) || stopRules.maxPortfolioLossUsd <= 0)) {
+    errors.push('maxPortfolioLossUsd must be positive and finite.');
+  }
+  if (stopRules?.minimumActiveAccounts !== undefined &&
+      (!Number.isInteger(stopRules.minimumActiveAccounts) ||
+       stopRules.minimumActiveAccounts < 1 ||
+       stopRules.minimumActiveAccounts > (config.accounts?.length ?? 0))) {
+    errors.push('minimumActiveAccounts must be between one and the account count.');
+  }
   if (errors.length) throw new Error(`Invalid contractual lifecycle configuration: ${errors.join(' ')}`);
 }
 
@@ -241,7 +275,9 @@ export function runContractualLifecycleSimulation(
       status: 'active',
       balanceUsd: balance,
       equityUsd: equity,
-      highWaterMarkUsd: account.initialHighWaterMarkUsd ?? Math.max(balance, equity),
+      highWaterMarkUsd: account.initialHighWaterMarkUsd ?? (
+        getRules(account).drawdown.basis === 'equity' ? equity : balance
+      ),
       cumulativeProfitUsd: account.initialCumulativeProfitUsd ?? balance - account.firm.accountSize,
       sessionId: account.initialSessionId ?? '',
       sessionStartBalanceUsd: account.initialSessionStartBalanceUsd ?? balance,
@@ -255,15 +291,24 @@ export function runContractualLifecycleSimulation(
 
   const steps: LifecycleStepResult[] = [];
   const transitions: LifecycleTransition[] = [];
+  const scenarioSnapshots: LifecycleScenarioSnapshot[] = [];
   let totalRealizedPayoutUsd = 0;
   let totalContractualPayoutOpportunityUsd = 0;
+  let cumulativePortfolioPnlUsd = config.accounts.reduce((sum, account) => {
+    const balance = account.initialBalanceUsd ?? account.firm.accountSize;
+    return sum + (account.initialCumulativeProfitUsd ?? balance - account.firm.accountSize);
+  }, 0);
+  let portfolioStopReason: ContractualLifecycleResult['portfolioStopReason'] = null;
 
   for (const scenario of config.scenarios) {
+    let scenarioRealizedPayoutUsd = 0;
+    let scenarioPayoutOpportunityUsd = 0;
     for (const account of config.accounts) {
       const id = account.accountId;
       const state = runtimes[id];
       const { outcome, path } = scenario.accounts[id];
       if (state.status !== 'active') continue;
+      cumulativePortfolioPnlUsd += path.dailyPnlUsd;
 
       // Unknown drawdown/daily-loss mechanics are rejected before this path step.
       getRules({ ...account, initialPhase: state.phase });
@@ -314,16 +359,22 @@ export function runContractualLifecycleSimulation(
       });
 
       if (!violation && outcome.accountStatus !== 'active') violation = `scenario_account_status_${outcome.accountStatus}`;
+      // Record the actual breach-day P&L in terminal account balances. A breach is
+      // absorbing, but it must not erase the loss that caused the breach.
+      state.balanceUsd = candidateBalance;
+      state.equityUsd = candidateEquity;
+      state.cumulativeProfitUsd = nextCumulative;
+      state.priorDailyPnlUsd.push(dailyPnl);
+      state.priorTradingDays += 1;
+
       if (violation) {
         state.status = outcome.accountStatus === 'restricted' || outcome.accountStatus === 'terminated' ? outcome.accountStatus : 'breached';
         transitions.push({ scenarioId: scenario.scenarioId, accountId: id, from: state.phase, to: state.status, reason: violation });
       } else {
-        state.balanceUsd = candidateBalance;
-        state.equityUsd = candidateEquity;
-        state.highWaterMarkUsd = Math.max(state.highWaterMarkUsd, state.balanceUsd);
-        state.cumulativeProfitUsd = nextCumulative;
-        state.priorDailyPnlUsd.push(dailyPnl);
-        state.priorTradingDays += 1;
+        const highWaterMarkBasis = dailyRules.drawdown.basis === 'equity'
+          ? state.equityUsd
+          : state.balanceUsd;
+        state.highWaterMarkUsd = Math.max(state.highWaterMarkUsd, highWaterMarkBasis);
         state.payoutCycleElapsedDays += 1;
       }
 
@@ -343,6 +394,7 @@ export function runContractualLifecycleSimulation(
           state.cumulativeProfitUsd -= requested;
           state.realizedPayoutTotalUsd += requested;
           totalRealizedPayoutUsd += requested;
+          scenarioRealizedPayoutUsd += requested;
           state.payoutCycleElapsedDays = 0;
           const postPayoutFloor = drawdownFloor(account, state, 0);
           const postPayoutValue = dailyRules.drawdown.basis === 'equity' ? state.equityUsd : state.balanceUsd;
@@ -375,9 +427,10 @@ export function runContractualLifecycleSimulation(
       const currentFloor = drawdownFloor(account, state, 0);
       const payoutCycleDays = account.firm.fundedRules.payoutCycleDays.value;
       const payoutOpportunity = state.phase === 'funded' && payoff.payoutContractuallyEligible &&
-        (payoutCycleDays === null || state.payoutCycleElapsedDays >= payoutCycleDays)
+        (payoutCycleDays === null || state.payoutCycleElapsedDays >= payoutCycleDays || realizedPayout > EPSILON)
         ? payoff.contractualTraderPayoutUsd : 0;
       totalContractualPayoutOpportunityUsd += payoutOpportunity;
+      scenarioPayoutOpportunityUsd += payoutOpportunity;
       steps.push({
         scenarioId: scenario.scenarioId,
         accountId: id,
@@ -398,6 +451,31 @@ export function runContractualLifecycleSimulation(
         violationReason: violation,
       });
     }
+
+    const accountStatuses = Object.fromEntries(
+      config.accounts.map((account) => [account.accountId, runtimes[account.accountId].status])
+    ) as Record<string, LifecycleStatus>;
+    const activeAccountCount = Object.values(accountStatuses).filter((status) => status === 'active').length;
+    scenarioSnapshots.push({
+      scenarioId: scenario.scenarioId,
+      cumulativePortfolioPnlUsd,
+      activeAccountCount,
+      accountStatuses,
+      realizedPayoutUsd: scenarioRealizedPayoutUsd,
+      contractualPayoutOpportunityUsd: scenarioPayoutOpportunityUsd,
+    });
+
+    const stopRules = config.portfolioStopRules;
+    if (stopRules?.maxPortfolioLossUsd !== undefined &&
+        cumulativePortfolioPnlUsd <= -stopRules.maxPortfolioLossUsd + EPSILON) {
+      portfolioStopReason = 'portfolio_loss_limit';
+      break;
+    }
+    if (stopRules?.minimumActiveAccounts !== undefined &&
+        activeAccountCount < stopRules.minimumActiveAccounts) {
+      portfolioStopReason = 'minimum_active_accounts';
+      break;
+    }
   }
 
   const terminalAccounts = Object.fromEntries(config.accounts.map((account) => {
@@ -416,12 +494,18 @@ export function runContractualLifecycleSimulation(
   return {
     steps,
     transitions,
+    scenarioSnapshots,
+    processedScenarioCount: scenarioSnapshots.length,
+    stoppedEarly: portfolioStopReason !== null,
+    portfolioStopReason,
     terminalAccounts,
     totalRealizedPayoutUsd,
     totalContractualPayoutOpportunityUsd,
     breachedAccounts: config.accounts.filter((a) => runtimes[a.accountId].status !== 'active').map((a) => a.accountId),
     modelingNotes: [
       'Scenario order is chronological and deterministic; no Monte Carlo sampling is performed by this lifecycle replay.',
+      'Optional portfolio stop rules are evaluated only after all configured accounts have processed the same trading-day scenario.',
+      'Breach-day P&L is retained in terminal balance, equity and cumulative profit even though the account status is absorbing.',
       'Session IDs must be generated by the caller using each contract resetTime and timezone; the engine resets daily baselines when the ID changes.',
       'Trailing EOD high-water marks update only after a non-breaching daily close; trailing intraday drawdown uses the supplied intraday peak and adverse excursion.',
       'Locked trailing drawdown locks at the initial account balance once the high-water mark reaches initial balance plus lockOffsetUsd.',
