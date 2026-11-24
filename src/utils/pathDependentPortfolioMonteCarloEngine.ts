@@ -17,7 +17,6 @@ import {
   createJointScenarioPrng,
   validateJointScenarioMatrix,
   type JointAccountDefinition,
-  type JointAccountStatus,
   type JointScenarioTemplate,
 } from './jointScenarioEngine.ts';
 
@@ -412,7 +411,8 @@ export function runPathDependentPortfolioMonteCarlo(
       failureAttribution.minimumActiveAccountStops += 1;
     }
 
-    const grossTradingPnl = (lifecycle.scenarioSnapshots.at(-1)?.cumulativePortfolioPnlUsd ?? initialCumulativePnl)
+    const lastSnapshot = lifecycle.scenarioSnapshots[lifecycle.scenarioSnapshots.length - 1];
+    const grossTradingPnl = (lastSnapshot?.cumulativePortfolioPnlUsd ?? initialCumulativePnl)
       - initialCumulativePnl;
     const realizedPayout = lifecycle.totalRealizedPayoutUsd;
     const contractualOpportunity = lifecycle.totalContractualPayoutOpportunityUsd;
