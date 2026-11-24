@@ -14,7 +14,7 @@ import {
 } from './contractualPayoffEngine.ts';
 import type { JointAccountOutcome } from './jointScenarioEngine.ts';
 
-export type LifecycleStatus = 'active' | 'breached' | 'terminated';
+export type LifecycleStatus = 'active' | 'breached' | 'restricted' | 'terminated';
 
 export interface LifecycleAccountConfig {
   accountId: string;
@@ -60,14 +60,13 @@ export interface ContractualLifecycleConfig {
   accounts: LifecycleAccountConfig[];
   /** Ordered, chronological path. These are path steps, not independent samples. */
   scenarios: LifecycleScenario[];
-  failClosedOnIncompleteContract?: boolean;
 }
 
 export interface LifecycleTransition {
   scenarioId: string;
   accountId: string;
   from: ContractualPayoffPhase | 'active';
-  to: ContractualPayoffPhase | 'breached';
+  to: ContractualPayoffPhase | 'breached' | 'restricted' | 'terminated';
   reason: string;
 }
 
@@ -213,6 +212,7 @@ function validate(config: ContractualLifecycleConfig): void {
       const entry = scenario.accounts?.[id];
       if (!entry) { errors.push(`Scenario "${scenario.scenarioId}" missing account "${id}".`); continue; }
       if (!finite(entry.path.dailyPnlUsd) || !entry.path.sessionId?.trim()) errors.push(`Scenario "${scenario.scenarioId}" has invalid daily P&L or sessionId for "${id}".`);
+      if (Math.abs(entry.outcome.grossPnlUsd - entry.path.dailyPnlUsd) > EPSILON) errors.push('Scenario ' + scenario.scenarioId + ' outcome P&L must match dailyPnlUsd for ' + id + '.');
       for (const value of [entry.path.intradayPeakPnlUsd, entry.path.intradayAdversePnlUsd, entry.path.realizedPayoutUsd]) {
         if (value !== undefined && !finite(value)) errors.push(`Scenario "${scenario.scenarioId}" has non-finite path data for "${id}".`);
       }
@@ -265,11 +265,8 @@ export function runContractualLifecycleSimulation(
       const { outcome, path } = scenario.accounts[id];
       if (state.status !== 'active') continue;
 
-      if (config.failClosedOnIncompleteContract !== false) {
-        // Contractual evaluator itself fails closed; this explicit guard keeps
-        // unknown drawdown/daily-loss mechanics from silently passing.
-        getRules({ ...account, initialPhase: state.phase });
-      }
+      // Unknown drawdown/daily-loss mechanics are rejected before this path step.
+      getRules({ ...account, initialPhase: state.phase });
       const openingBalance = state.balanceUsd;
       const openingEquity = state.equityUsd;
       if (path.sessionId !== state.sessionId) {
@@ -318,8 +315,8 @@ export function runContractualLifecycleSimulation(
 
       if (!violation && outcome.accountStatus !== 'active') violation = `scenario_account_status_${outcome.accountStatus}`;
       if (violation) {
-        state.status = 'breached';
-        transitions.push({ scenarioId: scenario.scenarioId, accountId: id, from: state.phase, to: 'breached', reason: violation });
+        state.status = outcome.accountStatus === 'restricted' || outcome.accountStatus === 'terminated' ? outcome.accountStatus : 'breached';
+        transitions.push({ scenarioId: scenario.scenarioId, accountId: id, from: state.phase, to: state.status, reason: violation });
       } else {
         state.balanceUsd = candidateBalance;
         state.equityUsd = candidateEquity;
