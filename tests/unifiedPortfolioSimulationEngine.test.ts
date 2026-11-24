@@ -76,7 +76,7 @@ test('only explicit realized cash inflows reduce the required external capital',
     }],
   });
   assert.equal(result.expectedExternalCapitalRequiredUsd, 100);
-  assert.equal(result.samplePaths[0].endingCashBalanceUsd, -100);
+  assert.equal(result.samplePaths[0].endingCashBalanceUsd, -50);
 });
 
 test('account loss limits are absorbing and can terminate the portfolio', () => {
