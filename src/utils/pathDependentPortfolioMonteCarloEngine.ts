@@ -179,7 +179,7 @@ function validateConfig(config: PathDependentMonteCarloConfig): void {
   }
 
   const minimum = config.minimumActiveAccounts ?? 1;
-  if (!Number.isInteger(minimum) || minimum < 1 || minimum > config.accounts.length) {
+  if (!Number.isInteger(minimum) || minimum < 1 || minimum > (config.accounts?.length ?? 0)) {
     errors.push('minimumActiveAccounts must be between one and the account count.');
   }
   if (config.maxPortfolioLossUsd != null &&
@@ -189,7 +189,7 @@ function validateConfig(config: PathDependentMonteCarloConfig): void {
 
   const definitions: JointAccountDefinition[] = (config.accounts ?? []).map((account) => ({
     accountId: account.accountId,
-    firmId: account.firm.firmId,
+    firmId: account.firm?.firmId ?? '',
   }));
   const matrixValidation = validateJointScenarioMatrix(definitions, config.scenarios);
   errors.push(...matrixValidation.errors);
@@ -227,7 +227,7 @@ function validateConfig(config: PathDependentMonteCarloConfig): void {
       if ((path.intradayPeakPnlUsd ?? 0) < (path.intradayAdversePnlUsd ?? 0)) {
         errors.push('Scenario "' + scenario.scenarioId + '" intraday peak is below adverse excursion for "' + id + '".');
       }
-      const scaledPnl = scenario.outcomes[id]?.grossPnlUsd * account.hedgeRatio;
+      const scaledPnl = scenario.outcomes[id].grossPnlUsd * account.hedgeRatio;
       if (!Number.isFinite(scaledPnl)) {
         errors.push('Scenario "' + scenario.scenarioId + '" produces non-finite scaled P&L for "' + id + '".');
       }
