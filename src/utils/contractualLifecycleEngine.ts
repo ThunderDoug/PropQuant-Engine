@@ -164,6 +164,7 @@ function getRules(account: LifecycleAccountConfig) {
   if (dailyLoss.methodology !== 'none') {
     dailyLossUsd = requiredRuleValue(dailyLoss.amountUsd, `${account.accountId} dailyLossLimit.amountUsd`);
   }
+  if (funded) requiredRuleValue(account.firm.fundedRules.payoutCycleDays, `${account.accountId} payoutCycleDays`);
   return { drawdown, drawdownUsd, dailyLoss, dailyLossUsd };
 }
 
@@ -361,6 +362,7 @@ export function runContractualLifecycleSimulation(
         }
       }
 
+      const displayRules = getRules({ ...account, initialPhase: state.phase });
       const currentFloor = drawdownFloor(account, state, 0);
       const payoutCycleDays = account.firm.fundedRules.payoutCycleDays.value;
       const payoutOpportunity = state.phase === 'funded' && payoff.payoutContractuallyEligible &&
@@ -377,7 +379,7 @@ export function runContractualLifecycleSimulation(
         equityUsd: state.equityUsd,
         highWaterMarkUsd: state.highWaterMarkUsd,
         drawdownFloorUsd: currentFloor,
-        drawdownRemainingUsd: Math.max(0, ((dailyRules.drawdown.basis === 'equity' ? state.equityUsd : state.balanceUsd) - currentFloor)),
+        drawdownRemainingUsd: Math.max(0, ((displayRules.drawdown.basis === 'equity' ? state.equityUsd : state.balanceUsd) - currentFloor)),
         dailyLossUsedUsd: dailyLossUsed,
         dailyLossRemainingUsd: dailyLossRemaining,
         payoutCycleElapsedDays: state.payoutCycleElapsedDays,
