@@ -10,12 +10,9 @@ import type { PropFirmPreset } from '../types/quant.ts';
 import {
   evaluatePayoutEligibility,
   roundCurrency,
-  validateFirmContract,
 } from './quantEngine.ts';
-import type {
-  JointAccountOutcome,
-  JointScenarioDefinition,
-} from './jointScenarioEngine.ts';
+import { validateFirmContract } from './contractual.ts';
+import type { JointAccountOutcome } from './jointScenarioEngine.ts';
 
 export type ContractualPayoffPhase =
   | 'evaluation_phase_1'
