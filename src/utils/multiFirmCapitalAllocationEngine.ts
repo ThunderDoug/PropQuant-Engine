@@ -233,9 +233,8 @@ export function optimizeMultiFirmCapitalAllocation(
   const minimumFirms = constraints.minimumDistinctFirms ?? 1;
   const units = new Array<number>(candidates.length).fill(0);
   const firmCapital: Record<string, number> = {};
-  const firmIds = [...new Set(candidates.map((candidate) => candidate.firmId))];
   let searchNodes = 0;
-  let best: CapitalAllocationResult | null = null;
+  const bestHolder: { value: CapitalAllocationResult | null } = { value: null };
 
   const evaluate = (capital: number): CapitalAllocationResult | null => {
     const activeIndexes = candidates.map((_, index) => index).filter((index) => units[index] > 0);
@@ -332,11 +331,11 @@ export function optimizeMultiFirmCapitalAllocation(
       const result = evaluate(capital);
       if (
         result &&
-        (!best ||
-          result.objectiveValueUsd > best.objectiveValueUsd + EPSILON ||
-          (Math.abs(result.objectiveValueUsd - best.objectiveValueUsd) <= EPSILON &&
-            result.committedCapitalUsd < best.committedCapitalUsd - EPSILON))
-      ) best = result;
+        (!bestHolder.value ||
+          result.objectiveValueUsd > bestHolder.value.objectiveValueUsd + EPSILON ||
+          (Math.abs(result.objectiveValueUsd - bestHolder.value.objectiveValueUsd) <= EPSILON &&
+            result.committedCapitalUsd < bestHolder.value.committedCapitalUsd - EPSILON))
+      ) bestHolder.value = result;
       return;
     }
 
@@ -354,6 +353,7 @@ export function optimizeMultiFirmCapitalAllocation(
   };
 
   visit(0, 0);
+  const best = bestHolder.value;
   if (!best) {
     return {
       status: 'infeasible',
