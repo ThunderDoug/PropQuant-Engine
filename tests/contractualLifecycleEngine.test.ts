@@ -116,7 +116,7 @@ test('fails closed when drawdown methodology is unknown', () => {
     ...firm,
     evaluationRules: {
       ...firm.evaluationRules,
-      maxDrawdown: { ...firm.evaluationRules.maxDrawdown, methodology: 'trailing_intraday' as const, amountUsd: { ...firm.evaluationRules.maxDrawdown.amountUsd, status: 'missing' as const, value: null },
+      maxDrawdown: { ...firm.evaluationRules.maxDrawdown, methodology: 'trailing_intraday' as const, amountUsd: { ...firm.evaluationRules.maxDrawdown.amountUsd, status: 'missing' as const, value: null } },
     },
   };
   assert.throws(() => runContractualLifecycleSimulation({ accounts: [{ ...account, firm: unknownFirm }], scenarios: [scenario('x', 1)] }), /missing or invalid/);
