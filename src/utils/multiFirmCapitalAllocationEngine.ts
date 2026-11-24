@@ -141,8 +141,8 @@ function validateInputs(
     ids.add(candidate.candidateId);
     if (!candidate.accountId?.trim()) errors.push(`Candidate "${candidate.candidateId}" requires accountId.`);
     if (!candidate.firmId?.trim()) errors.push(`Candidate "${candidate.candidateId}" requires firmId.`);
-    if (!isFiniteNonNegative(candidate.capitalRequiredUsd)) {
-      errors.push(`Candidate "${candidate.candidateId}" capitalRequiredUsd must be non-negative.`);
+    if (!Number.isFinite(candidate.capitalRequiredUsd) || candidate.capitalRequiredUsd <= 0) {
+      errors.push(`Candidate "${candidate.candidateId}" capitalRequiredUsd must be positive and finite.`);
     }
     if (!Number.isInteger(candidate.maxUnits) || candidate.maxUnits < 0) {
       errors.push(`Candidate "${candidate.candidateId}" maxUnits must be a non-negative integer.`);
