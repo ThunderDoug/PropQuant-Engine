@@ -205,6 +205,12 @@ function validateConfig(config: PathDependentMonteCarloConfig): void {
       if (!path.sessionId?.trim()) {
         errors.push('Scenario "' + scenario.scenarioId + '" has an empty sessionId for "' + id + '".');
       }
+      const dailyLossIsEnabled = account.firm &&
+        (account.firm.evaluationRules.dailyLossLimit.methodology !== 'none' ||
+         account.firm.fundedRules.dailyLossLimit.methodology !== 'none');
+      if (config.horizonPeriods > 1 && dailyLossIsEnabled && path.sessionIdByPeriod === undefined) {
+        errors.push('Scenario "' + scenario.scenarioId + '" requires sessionIdByPeriod for multi-period daily-loss modeling (' + id + ').');
+      }
       if (path.sessionIdByPeriod !== undefined) {
         if (!Array.isArray(path.sessionIdByPeriod) ||
             path.sessionIdByPeriod.length < config.horizonPeriods ||
