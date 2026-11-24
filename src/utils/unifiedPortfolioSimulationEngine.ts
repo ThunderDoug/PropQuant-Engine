@@ -312,7 +312,7 @@ export function runUnifiedPortfolioSimulation(
     expectedExternalCapitalRequiredUsd: mean(capitalRequired),
     externalCapitalRequiredP50Usd: quantile(capitalRequired, 0.5),
     externalCapitalRequiredP95Usd: quantile(capitalRequired, 0.95),
-    maximumExternalCapitalRequiredUsd: Math.max(...capitalRequired),
+    maximumExternalCapitalRequiredUsd: capitalRequired.reduce((maximum, value) => Math.max(maximum, value), 0),
     endingCashBalanceMeanUsd: mean(endingCash),
     endingCashBalanceP05Usd: quantile(endingCash, 0.05),
     endingCashBalanceP50Usd: quantile(endingCash, 0.5),
