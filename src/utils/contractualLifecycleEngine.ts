@@ -172,7 +172,7 @@ function drawdownFloor(
   runtime: RuntimeAccount,
   intradayPeakPnlUsd: number,
 ): number {
-  const { drawdown, drawdownUsd } = getRules(account);
+  const { drawdown, drawdownUsd } = getRules({ ...account, initialPhase: runtime.phase });
   const initial = account.firm.accountSize;
   if (drawdown.methodology === 'static') return initial - drawdownUsd;
 
@@ -279,8 +279,8 @@ export function runContractualLifecycleSimulation(
       const dailyLossUsed = dailyRules.dailyLossUsd === null ? 0 : Math.max(
         0,
         dailyRules.dailyLoss.methodology === 'equity_based'
-          ? -adversePnl
-          : -(openingBalance + Math.min(0, dailyPnl) - state.sessionStartBalanceUsd)
+          ? Math.max(0, state.sessionStartEquityUsd - (openingEquity + adversePnl))
+          : Math.max(0, state.sessionStartBalanceUsd - (openingBalance + Math.min(0, dailyPnl)))
       );
       const dailyLossRemaining = dailyRules.dailyLossUsd === null
         ? null
@@ -361,7 +361,6 @@ export function runContractualLifecycleSimulation(
         }
       }
 
-      const currentRules = getRules({ ...account, initialPhase: state.phase });
       const currentFloor = drawdownFloor(account, state, 0);
       const payoutCycleDays = account.firm.fundedRules.payoutCycleDays.value;
       const payoutOpportunity = state.phase === 'funded' && payoff.payoutContractuallyEligible &&
@@ -378,7 +377,7 @@ export function runContractualLifecycleSimulation(
         equityUsd: state.equityUsd,
         highWaterMarkUsd: state.highWaterMarkUsd,
         drawdownFloorUsd: currentFloor,
-        drawdownRemainingUsd: Math.max(0, (state.equityUsd - currentFloor)),
+        drawdownRemainingUsd: Math.max(0, ((dailyRules.drawdown.basis === 'equity' ? state.equityUsd : state.balanceUsd) - currentFloor)),
         dailyLossUsedUsd: dailyLossUsed,
         dailyLossRemainingUsd: dailyLossRemaining,
         payoutCycleElapsedDays: state.payoutCycleElapsedDays,
@@ -387,7 +386,6 @@ export function runContractualLifecycleSimulation(
         realizedPayoutUsd: realizedPayout,
         violationReason: violation,
       });
-      void currentRules;
     }
   }
 
