@@ -34,7 +34,7 @@ Contractual payout eligibility is not cash. The engine reports the maximum obser
 - Account loss limits use cumulative scenario P&L, not intraday equity, daily-loss resets, or trailing high-water-mark drawdown.
 - Contractual phase transitions and payout-cycle resets are not inferred. The current Phase 2 evaluator is applied as a one-step evaluator while cumulative state is advanced.
 - No broker order execution, instrument point-value conversion, automatic hedge rebalancing, or financing is implemented.
-- Cash flows are not inferred from trading P&L or contractual payout. Missing entries are zero.
+- Cash flows are not inferred from trading P&L or contractual payout. Missing entries are zero. Explicit per-account cash flows continue to be applied each simulated period even after that account fails; callers should set post-failure cash flows to zero when the associated costs cease.
 - The external-capital metric is the maximum cash deficit before hypothetical capital injections, not a recommendation or guaranteed funding amount.
 - Monte Carlo intervals are not provided here; probabilities are conditional on the supplied model and are not forecasts or guarantees.
 
