@@ -216,3 +216,34 @@ test('account loss limit triggers an account breach without relying on status in
   assert.equal(result.accountSurvival['A-1'].failureProbability, 1);
   assert.equal(result.accountSurvival['A-1'].failureCauseCounts.account_loss_limit, 100);
 });
+
+
+test('minimum active-account requirement can terminate the whole portfolio', () => {
+  const oneAccountBreaches: JointScenarioTemplate = {
+    scenarioId: 'one-breach',
+    probability: 1,
+    marketEvent: 'single-account-failure',
+    outcomes: {
+      'A-1': {
+        grossPnlUsd: -100,
+        outcomeType: 'loss',
+        accountStatus: 'breached',
+        payoutStatus: 'blocked',
+      },
+      'B-1': {
+        grossPnlUsd: 0,
+        outcomeType: 'flat',
+        accountStatus: 'active',
+        payoutStatus: 'not_eligible',
+      },
+    },
+  };
+  const result = runPortfolioSurvivalAnalysis(
+    makeConfig([oneAccountBreaches], { minimumActiveAccounts: 2 })
+  );
+  assert.equal(result.portfolioSurvivalProbability, 0);
+  assert.equal(
+    result.portfolioFailureCauseCounts.minimum_active_accounts,
+    100
+  );
+});
