@@ -8,8 +8,13 @@ import {
 } from '../src/utils/contractualPayoffEngine.ts';
 import type { JointScenarioDefinition } from '../src/utils/contractualPayoffEngine.ts';
 
-const firm = DEFAULT_PROP_FIRMS_2026.find((item) => item.id === 'apex-50k');
-assert.ok(firm, 'Apex 50K fixture must exist');
+import type { PropFirmPreset } from '../src/types/quant.ts';
+
+const foundFirm = DEFAULT_PROP_FIRMS_2026.find((item) => item.id === 'apex-50k');
+if (!foundFirm) {
+  throw new Error('Apex 50K fixture must exist');
+}
+const firm: PropFirmPreset = foundFirm;
 
 function fundedInput(overrides: Partial<ContractualPayoffInput> = {}): ContractualPayoffInput {
   return {
@@ -84,7 +89,7 @@ test('keeps pending and approved payouts as contractual amounts, not realized ca
 });
 
 test('evaluation phase has no withdrawal and checks target, minimum days and consistency', () => {
-  const result = calculateContractualPayoff({
+  const tooEarly = calculateContractualPayoff({
     firm,
     accountState: {
       phase: 'evaluation_phase_1',
@@ -94,6 +99,25 @@ test('evaluation phase has no withdrawal and checks target, minimum days and con
     },
     scenarioOutcome: {
       grossPnlUsd: 1500,
+      outcomeType: 'win',
+      accountStatus: 'active',
+      payoutStatus: 'not_eligible',
+    },
+  });
+  assert.equal(tooEarly.phasePassed, false);
+  assert.equal(tooEarly.contractualTraderPayoutUsd, 0);
+  assert.ok(tooEarly.payoutBlockedReasons.some((reason) => /Minimum trading days not met: 2\/7/.test(reason)));
+
+  const result = calculateContractualPayoff({
+    firm,
+    accountState: {
+      phase: 'evaluation_phase_1',
+      cumulativeProfitUsd: 2500,
+      priorDailyPnlUsd: [500, 400, 400, 400, 400, 400],
+      priorTradingDays: 6,
+    },
+    scenarioOutcome: {
+      grossPnlUsd: 500,
       outcomeType: 'win',
       accountStatus: 'active',
       payoutStatus: 'not_eligible',

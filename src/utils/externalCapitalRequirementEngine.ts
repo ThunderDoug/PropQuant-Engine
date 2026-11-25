@@ -57,6 +57,18 @@ export interface ExternalCapitalRequirementResult {
 
 const EPSILON = 1e-9;
 
+function roundTo(value: number, decimals = 10): number {
+  const rounded = Number(value.toFixed(decimals));
+  return Object.is(rounded, -0) ? 0 : rounded;
+}
+
+function clampProbability(value: number): number {
+  const rounded = roundTo(value, 10);
+  if (rounded <= EPSILON) return 0;
+  if (rounded >= 1 - EPSILON) return 1;
+  return rounded;
+}
+
 function finiteNonNegative(value: number): boolean {
   return Number.isFinite(value) && value >= 0;
 }
@@ -69,9 +81,9 @@ function weightedQuantile(
   let cumulative = 0;
   for (const item of sorted) {
     cumulative += item.probability;
-    if (cumulative + EPSILON >= confidence) return item.value;
+    if (cumulative + EPSILON >= confidence) return roundTo(item.value, 10);
   }
-  return sorted.length ? sorted[sorted.length - 1].value : 0;
+  return sorted.length ? roundTo(sorted[sorted.length - 1].value, 10) : 0;
 }
 
 /** Probability-weighted mean of the worst (1-confidence) funding-requirement tail. */
@@ -79,17 +91,17 @@ function weightedTailMean(
   values: Array<{ value: number; probability: number }>,
   confidence: number
 ): number {
-  const tailMass = 1 - confidence;
+  const tailMass = roundTo(1 - confidence, 12);
   const sorted = [...values].sort((a, b) => b.value - a.value);
   let remaining = tailMass;
   let weighted = 0;
   for (const item of sorted) {
     const mass = Math.min(remaining, item.probability);
     weighted += item.value * mass;
-    remaining -= mass;
+    remaining = Math.max(0, roundTo(remaining - mass, 12));
     if (remaining <= EPSILON) break;
   }
-  return tailMass > 0 ? weighted / tailMass : (sorted[0]?.value ?? 0);
+  return tailMass > 0 ? roundTo(weighted / tailMass, 10) : roundTo(sorted[0]?.value ?? 0, 10);
 }
 
 function validate(
@@ -201,17 +213,29 @@ export function calculateMinimumExternalCapital(
     value: item.externalCapitalRequiredUsd,
     probability: item.probability,
   }));
-  const expected = distribution.reduce((sum, item) => sum + item.value * item.probability, 0);
+  const expected = roundTo(
+    distribution.reduce((sum, item) => sum + item.value * item.probability, 0),
+    10
+  );
   const recommended = weightedQuantile(distribution, confidence);
   const tailMean = weightedTailMean(distribution, confidence);
-  const sufficientProbability = scenarioResults.reduce(
-    (sum, item) => sum + (item.survivesWithAvailableCapital ? item.probability : 0), 0
+  const sufficientProbability = clampProbability(
+    scenarioResults.reduce(
+      (sum, item) => sum + (item.survivesWithAvailableCapital ? item.probability : 0),
+      0
+    )
   );
-  const budgetSufficient = budget === undefined ? null : scenarioResults.reduce(
-    (sum, item) => sum + (item.externalCapitalRequiredUsd <= budget + EPSILON ? item.probability : 0), 0
-  );
-  const worst = Math.max(...distribution.map((item) => item.value));
-  const maximumGap = Math.max(0, worst - (budget ?? worst));
+  const budgetSufficient =
+    budget === undefined
+      ? null
+      : clampProbability(
+          scenarioResults.reduce(
+            (sum, item) => sum + (item.externalCapitalRequiredUsd <= budget + EPSILON ? item.probability : 0),
+            0
+          )
+        );
+  const worst = roundTo(Math.max(...distribution.map((item) => item.value)), 10);
+  const maximumGap = roundTo(Math.max(0, worst - (budget ?? worst)), 10);
 
   return {
     status: sufficientProbability >= 1 - EPSILON ? 'feasible' : 'funding_shortfall',
@@ -222,7 +246,7 @@ export function calculateMinimumExternalCapital(
     recommendedExternalCapitalUsd: recommended,
     worstCaseExternalCapitalRequiredUsd: worst,
     probabilityAvailableCapitalIsSufficient: sufficientProbability,
-    probabilityOfFundingShortfall: 1 - sufficientProbability,
+    probabilityOfFundingShortfall: clampProbability(1 - sufficientProbability),
     probabilityFundingBudgetIsSufficient: budgetSufficient,
     fundingBudgetUsd: budget ?? null,
     valueAtRiskFundingRequirementUsd: recommended,

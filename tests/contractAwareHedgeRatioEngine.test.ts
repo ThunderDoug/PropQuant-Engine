@@ -84,7 +84,18 @@ test('supports account-specific asymmetric hedge ratios', () => {
 });
 
 test('returns infeasible when no ratio vector meets the loss-probability constraint', () => {
-  const result = optimizeContractAwareHedgeRatios([account], scenarios, {
+  const zeroExposureResult = optimizeContractAwareHedgeRatios([account], scenarios, {
+    constraints: { maxProbabilityOfCombinedLoss: 0.3 },
+  });
+  assert.equal(zeroExposureResult.status, 'optimal');
+  assert.equal(zeroExposureResult.allocation[0].ratio, 0);
+  assert.equal(zeroExposureResult.metrics?.probabilityOfCombinedLoss, 0);
+
+  const positiveExposureAccount: HedgeRatioAccount = {
+    ...account,
+    ratio: { min: 1, max: 2, step: 1 },
+  };
+  const result = optimizeContractAwareHedgeRatios([positiveExposureAccount], scenarios, {
     constraints: { maxProbabilityOfCombinedLoss: 0.3 },
   });
   assert.equal(result.status, 'infeasible');

@@ -6,6 +6,10 @@ import { ContextToolbar } from './components/ContextToolbar';
 import { DailySimulationModule } from './components/DailySimulationModule';
 import { Header } from './components/Header';
 import { MonteCarloModule } from './components/MonteCarloModule';
+import {
+  PortfolioQuantModule,
+  type PortfolioQuantSummarySnapshot,
+} from './components/PortfolioQuantModule';
 import { PropFirmsModule } from './components/PropFirmsModule';
 import { TradeSizingModule } from './components/TradeSizingModule';
 import { DEFAULT_PROP_FIRMS_2026 } from './data/propFirms2026';
@@ -190,6 +194,9 @@ export default function App() {
   );
 
   const [monteCarloSummary, setMonteCarloSummary] = useState<MonteCarloSummary | null>(null);
+  const [portfolioSummary, setPortfolioSummary] = useState<PortfolioQuantSummarySnapshot | null>(
+    null
+  );
 
   const [isConsultantOpen, setIsConsultantOpen] = useState(false);
   const [pendingTrigger, setPendingTrigger] = useState<{
@@ -498,6 +505,7 @@ export default function App() {
             capitalRealP95_USD: Number(monteCarloSummary.p95MaxBrokerOutlayUsd.toFixed(2)),
           }
         : null,
+      portfolioMultiMesaFases1a11: portfolioSummary,
     }),
     [
       activeFirm,
@@ -515,6 +523,7 @@ export default function App() {
       funded101Inputs,
       funded101Outputs,
       monteCarloSummary,
+      portfolioSummary,
     ]
   );
 
@@ -662,6 +671,17 @@ export default function App() {
               funded101Inputs={funded101Inputs}
               onChangeFunded101={setFunded101Inputs}
               onSummaryChange={setMonteCarloSummary}
+              onConsultIntent={handleConsultIntent}
+            />
+          )}
+
+          {activeSection === 'portfolio' && activeFirm && (
+            <PortfolioQuantModule
+              firms={firms}
+              activeFirm={activeFirm}
+              arbitrageInputs={arbitrageInputs}
+              hedgeFactor={arbitrageOutputs.hedgeFactor}
+              onSummaryChange={setPortfolioSummary}
               onConsultIntent={handleConsultIntent}
             />
           )}

@@ -8,8 +8,11 @@ import {
   type ContractOptimizationScenario,
 } from '../src/utils/contractualPayoffOptimizationEngine.ts';
 
-const baseFirm = DEFAULT_PROP_FIRMS_2026.find((item) => item.id === 'apex-50k');
-assert.ok(baseFirm, 'Apex 50K fixture must exist');
+const foundBaseFirm = DEFAULT_PROP_FIRMS_2026.find((item) => item.id === 'apex-50k');
+if (!foundBaseFirm) {
+  throw new Error('Apex 50K fixture must exist');
+}
+const baseFirm: PropFirmPreset = foundBaseFirm;
 
 function contractVariant(
   firmId: string,
@@ -69,13 +72,21 @@ const scenarios: ContractOptimizationScenario[] = [
   },
 ];
 
+const singleAccountScenarios: ContractOptimizationScenario[] = scenarios.map((scenario) => ({
+  scenarioId: scenario.scenarioId,
+  probability: scenario.probability,
+  outcomes: {
+    'A-1': scenario.outcomes['A-1'],
+  },
+}));
+
 test('chooses the contract alternative with the higher expected nonlinear payout', () => {
   const result = optimizeContractualPayoffAllocation(
     [slot('A-1', [
       { alternativeId: 'low-buffer', firm: lowBufferFirm, accountState: fundedState },
       { alternativeId: 'high-buffer', firm: highBufferFirm, accountState: fundedState },
     ])],
-    scenarios,
+    singleAccountScenarios,
     { constraints: { requireCompleteContracts: false } },
   );
 
@@ -133,7 +144,7 @@ test('returns infeasible when payout opportunity constraints cannot be met', () 
     [slot('A-1', [
       { alternativeId: 'low-buffer', firm: lowBufferFirm, accountState: fundedState },
     ])],
-    scenarios,
+    singleAccountScenarios,
     {
       constraints: {
         requireCompleteContracts: false,
@@ -166,7 +177,7 @@ test('fails closed by default when a contract is incomplete for simulation', () 
     [slot('A-1', [
       { alternativeId: 'incomplete', firm: incompleteFirm, accountState: fundedState },
     ])],
-    scenarios,
+    singleAccountScenarios,
   );
   assert.equal(result.status, 'infeasible');
   assert.equal(result.alternativeDiagnostics[0].contractCompletenessProbability, 0);
@@ -180,7 +191,7 @@ test('rejects invalid joint scenario probabilities and incomplete account covera
   assert.throws(
     () => optimizeContractualPayoffAllocation(
       [slot('A-1')],
-      [{ ...scenarios[0], probability: 0.5 }],
+      [{ ...singleAccountScenarios[0], probability: 0.5 }],
       { constraints: { requireCompleteContracts: false } },
     ),
     /probabilities must sum to 1/,

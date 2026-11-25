@@ -12,6 +12,7 @@ const NAV_ITEMS: Array<{ id: WorkspaceSection; label: string }> = [
   { id: 'capital', label: 'Capital & Bônus' },
   { id: 'daily', label: 'Simulador Diário' },
   { id: 'montecarlo', label: 'Monte Carlo' },
+  { id: 'portfolio', label: 'Portfólio Multi-Mesa' },
   { id: 'firms', label: 'Mesas & Histórico' },
 ];
 

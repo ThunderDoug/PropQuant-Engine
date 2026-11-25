@@ -329,8 +329,9 @@ function buildAssignment(
   slots: ContractAccountSlot[],
   scenarios: ContractOptimizationScenario[]
 ): EvaluatedAssignment {
-  const byAccount = new Map(selected.map((item) => [item.accountId, item]));
-  const scenarioResults: ContractOptimizationScenarioResult[] = scenarios.map((scenario) => {
+  const snapshot = [...selected];
+  const byAccount = new Map(snapshot.map((item) => [item.accountId, item]));
+  const scenarioResults: ContractOptimizationScenarioResult[] = scenarios.map((scenario, scenarioIndex) => {
     const accountResults: Record<string, ContractualPayoffResult> = {};
     let grossPnlUsd = 0;
     let contractualTraderPayoutUsd = 0;
@@ -338,9 +339,7 @@ function buildAssignment(
     let evaluationPassCount = 0;
     for (const slot of slots) {
       const selectedAlternative = byAccount.get(slot.accountId)!;
-      const result = selectedAlternative.scenarioResults[
-        scenarios.findIndex((candidate) => candidate.scenarioId === scenario.scenarioId)
-      ];
+      const result = selectedAlternative.scenarioResults[scenarioIndex];
       accountResults[slot.accountId] = result;
       grossPnlUsd += result.inputPnlUsd;
       contractualTraderPayoutUsd += result.contractualTraderPayoutUsd;
@@ -381,14 +380,14 @@ function buildAssignment(
     }
   });
 
-  const distinctFirmCount = new Set(selected.map((item) => item.alternative.firm.firmId)).size;
-  const allocationKey = selected
+  const distinctFirmCount = new Set(snapshot.map((item) => item.alternative.firm.firmId)).size;
+  const allocationKey = snapshot
     .map((item) => `${item.accountId}:${item.alternative.alternativeId}`)
     .sort()
     .join('|');
 
   return {
-    selected,
+    selected: snapshot,
     scenarioResults,
     expectedGrossPnlUsd,
     expectedContractualTraderPayoutUsd,
@@ -484,7 +483,7 @@ export function optimizeContractualPayoffAllocation(
           `Contract optimization search limit exceeded (${maxNodes} complete allocations); no optimality claim is available.`
         );
       }
-      const assignment = buildAssignment(selected, slots, scenarios);
+      const assignment = buildAssignment([...selected], slots, scenarios);
       if (assignmentIsFeasible(assignment, constraints) &&
           isBetter(assignment, best, tolerance)) {
         best = assignment;

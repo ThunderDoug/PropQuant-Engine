@@ -6,6 +6,7 @@ export type WorkspaceSection =
   | 'capital'
   | 'daily'
   | 'montecarlo'
+  | 'portfolio'
   | 'firms';
 
 export type PropFirmCategory = 'CFD / Forex' | 'Futuros';
